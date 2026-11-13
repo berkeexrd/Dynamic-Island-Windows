@@ -28,9 +28,9 @@ if(MSVC)
 endif()
 
 # ---- Aether Bar: standalone taskbar replacement (separate exe, same rendering stack) ----------
-add_executable(AetherBar WIN32 bar/main.cpp bar/aether_bar.cpp src/render/dcomp_layer.cpp)
+add_executable(AetherBar WIN32 bar/main.cpp bar/aether_bar.cpp bar/start_menu.cpp src/render/dcomp_layer.cpp)
 target_include_directories(AetherBar PRIVATE include third_party/json)
-target_link_libraries(AetherBar PRIVATE d3d11 dxgi d2d1 dwrite dcomp dwmapi shcore shell32 ole32)
+target_link_libraries(AetherBar PRIVATE d3d11 dxgi d2d1 dwrite dcomp dwmapi shcore shell32 ole32 oleaut32 uuid powrprof advapi32)
 if(MSVC)
     target_compile_options(AetherBar PRIVATE /utf-8 /permissive- /EHsc)
 endif()

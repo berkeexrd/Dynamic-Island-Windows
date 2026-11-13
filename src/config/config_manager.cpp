@@ -69,6 +69,7 @@ bool ConfigManager::Save() {
         j["island"]["showClockIdle"] = m_config.island.showClockIdle;
         j["island"]["showAudioVisualizer"] = m_config.island.showAudioVisualizer;
         j["island"]["mediaAutoExpand"] = m_config.island.mediaAutoExpand;
+        j["island"]["hideFromScreenshots"] = m_config.island.hideFromScreenshots;
         j["island"]["notificationDismissSeconds"] = m_config.island.notificationDismissSeconds;
 
         // Widgets
@@ -168,6 +169,7 @@ bool ConfigManager::Load() {
             if (ji.contains("showClockIdle")) m_config.island.showClockIdle = ji["showClockIdle"];
             if (ji.contains("showAudioVisualizer")) m_config.island.showAudioVisualizer = ji["showAudioVisualizer"];
             if (ji.contains("mediaAutoExpand")) m_config.island.mediaAutoExpand = ji["mediaAutoExpand"];
+            if (ji.contains("hideFromScreenshots")) m_config.island.hideFromScreenshots = ji["hideFromScreenshots"];
             if (ji.contains("notificationDismissSeconds")) m_config.island.notificationDismissSeconds = ji["notificationDismissSeconds"];
         }
 

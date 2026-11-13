@@ -1,5 +1,31 @@
 # Değişiklik Günlüğü
 
+## [1.3.0] - 2026-11-13
+
+### Düzeltildi
+- **Aether Bar çevresindeki alanlara (üst, sol, sağ, tepsi bölgesi) tıklamayı engelliyordu.** Başka bir uygulamanın penceresi
+  `HTTRANSPARENT` ile tıklama geçirmez; bu yüzden çubuk artık sadece dock, sistem kapsülü ve tooltip'i kapsayan şekilli bir pencere
+  bölgesi kullanıyor. Ekranın geri kalanı yine tıklanabilir.
+- Island'ın tıklama engelleyen dolgusu kompakt hâlde çok daha dar (büyük kartlar hâlâ geniş gölge alanı kullanır).
+
+### Eklendi - Aether Bar
+- **Özel Başlat menüsü** (`start_menu.cpp`): dock üstünde spring animasyonla açılır, Windows'unkinin yerini alır.
+  - Sabitlenmiş uygulamalar + harf başlıklı "Tüm uygulamalar"; masaüstü *ve* Microsoft Store uygulamaları (shell AppsFolder).
+  - Anlık arama (önce baştan eşleşenler), klavye gezinmesi (oklar, Enter, Esc, PgUp/PgDn), akıcı kaydırma.
+  - Uygulamaya sağ tık: Aç / Başlat'a sabitle / Kaldır. Sabitler `%APPDATA%\Aether\start_pins.txt` içinde.
+  - Alt kısımda kullanıcı avatarı, Ayarlar ve güç menüsü (Kilitle, Oturumu kapat, Uyku, Yeniden başlat, Kapat).
+  - **Windows tuşu** bunu açar (düşük seviye klavye hook'u). Win+E / Win+D / Win+B gibi kombinasyonlar çalışmaya devam eder. `--no-start-hook` ile kapatılır.
+- **Çoklu monitör**: her ekran için bir çubuk, her biri sadece kendi monitöründeki pencereleri listeler; monitör/DPI değişince otomatik yenilenir.
+- **Sistem tepsisi erişimi**: Windows görev çubuğu yok edilmek yerine otomatik gizleme modunda tutulur, gerçek tepsi çalışır. Ok (^) butonu (Win+B) onu açar.
+  Tamamen gizlemek için `--hide-stock`.
+- **Hızlı durum kapsülü** (ana monitör): canlı seviyeli ses ikonu (kaydırınca ses, orta tuş sessiz), pil, saat/tarih, masaüstünü göster şeridi.
+  Tıklayınca gerçek paneller açılır: hızlı ayarlar (Win+A), bildirimler ve takvim (Win+N), masaüstü (Win+D).
+- Her kontrol için tooltip; sabitlenen uygulamalar tüm çubuklarda ortak ve sıralı.
+
+### Eklendi - Dynamic Island
+- **Seçenek: Island'ı ekran görüntüsünden gizle** (Ayarlar > Dynamic Island). Varsayılan kapalı; yani ekran görüntüsünde artık island görünür.
+- Island artık **Hedef Monitör** ayarını uygular (ana / ikinci / üçüncü ekran) ve değişince canlı taşınır.
+
 ## [1.2.0] - 2026-11-13
 
 ### Eklendi - Aether Bar (yeni, ayrı `AetherBar.exe`)

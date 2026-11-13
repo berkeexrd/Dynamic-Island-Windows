@@ -3,6 +3,32 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/), versions follow [SemVer](https://semver.org/).
 
+## [1.3.0] - 2026-11-13
+
+### Fixed
+- **Aether Bar blocked clicks around it** (above, left, right and over the tray area). A foreign window cannot be made
+  click-through with `HTTRANSPARENT`, so the bar now uses a shaped window region that only covers the dock, the system pill
+  and the tooltip. Everything else on the screen is clickable again.
+- The island's click-blocking padding is now much tighter while it is compact (only the big expanded cards keep the larger shadow area).
+
+### Added - Aether Bar
+- **Custom Start menu** (new `start_menu.cpp`): opens above the dock with a spring animation and replaces the Windows one.
+  - Pinned apps + alphabetical "All apps" with letter headers, built from the shell's AppsFolder (desktop *and* Microsoft Store apps).
+  - Instant search (prefix matches first), keyboard navigation (arrows, Enter, Esc, PgUp/PgDn), smooth scrolling.
+  - Right-click an app: Open / Pin to Start / Unpin. Pins are stored in `%APPDATA%\Aether\start_pins.txt`.
+  - Footer with user avatar, Settings and a power menu (Lock, Sign out, Sleep, Restart, Shut down).
+  - Pressing the **Windows key** opens it (low-level hook). Combos such as Win+E / Win+D / Win+B keep working. Disable with `--no-start-hook`.
+- **Multi-monitor**: one bar per display, each listing only the windows that live on its monitor; rebuilt automatically when monitors or DPI change.
+- **System tray access**: the stock taskbar is kept in auto-hide instead of being destroyed, so the real tray works. The chevron button (Win+B)
+  reveals it. Use `--hide-stock` to hide it completely instead.
+- **Quick-status pill** (primary monitor): volume icon with live level (scroll to change volume, middle-click to mute), battery, clock/date,
+  and a show-desktop sliver. Clicking opens the real flyouts: quick settings (Win+A), notifications and calendar (Win+N), show desktop (Win+D).
+- Tooltips for every control; pinned apps are shared across all bars and stay in pin order.
+
+### Added - Dynamic Island
+- **Option: Hide island from screenshots** (Settings > Dynamic Island). Off by default, so screenshots and recordings now include the island.
+- The island now honours the **Target Monitor** setting (primary / second / third display) and moves live when it changes.
+
 ## [1.2.0] - 2026-11-13
 
 ### Added - Aether Bar (new, separate `AetherBar.exe`)

@@ -9,6 +9,7 @@
 #include <shellscalingapi.h>
 #include <windowsx.h>
 #include <d2d1effects.h>
+#include "aether/core/monitors.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -190,14 +191,13 @@ LRESULT CALLBACK IslandWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
 }
 
 void IslandWindow::PositionWindow() {
-    HMONITOR mon = MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
+    const int index = config::ConfigManager::Instance().Get().monitorIndex;
+    m_monitorApplied = index;
+    HMONITOR mon = core::MonitorByIndex(index);
     MONITORINFO mi = {sizeof(MONITORINFO)};
     GetMonitorInfoW(mon, &mi);
 
-    UINT dpiX = 96, dpiY = 96;
-    if (FAILED(GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &dpiX, &dpiY)) || dpiX == 0) dpiX = 96;
-    m_dpiScale = static_cast<float>(dpiX) / 96.0f;
-
+    m_dpiScale = core::MonitorScale(mon);
     m_windowWidth = static_cast<uint32_t>(kWindowW * m_dpiScale);
     m_windowHeight = static_cast<uint32_t>(kWindowH * m_dpiScale);
 
@@ -232,8 +232,6 @@ bool IslandWindow::Create() {
         return false;
     }
 
-    // Keep the island out of screenshots / screen recordings, like a hardware cut-out would be.
-    SetWindowDisplayAffinity(m_hwnd, 0x00000011 /* WDA_EXCLUDEFROMCAPTURE */);
     PositionWindow();
 
     m_dcomp = std::make_unique<render::DCompLayer>();
@@ -486,10 +484,13 @@ void IslandWindow::UpdateWindowRegion(const Rect& bounds) {
     }
     m_lastRegionBounds = bounds;
 
-    // Padding leaves room for the soft shadow. Clicks in the padding fall through (HTTRANSPARENT).
-    const int padX = static_cast<int>(40.0f * m_dpiScale);
-    const int padTop = static_cast<int>(10.0f * m_dpiScale);
-    const int padBottom = static_cast<int>(48.0f * m_dpiScale);
+    // The window region both clips drawing and decides which clicks the island swallows (a foreign
+    // window cannot be "click-through" via HTTRANSPARENT), so keep the shadow padding tight when the
+    // island is small and only grow it for the big expanded cards.
+    const bool big = bounds.height > 60.0f * m_dpiScale;
+    const int padX = static_cast<int>((big ? 38.0f : 18.0f) * m_dpiScale);
+    const int padTop = static_cast<int>(4.0f * m_dpiScale);
+    const int padBottom = static_cast<int>((big ? 46.0f : 22.0f) * m_dpiScale);
     const int x1 = static_cast<int>(bounds.Left()) - padX;
     const int y1 = static_cast<int>(bounds.Top()) - padTop;
     const int x2 = static_cast<int>(bounds.Right()) + padX;
@@ -555,6 +556,24 @@ void IslandWindow::Update(float dt) {
     const auto& cfg = config::ConfigManager::Instance().Get();
     const float frameDt = std::min(dt, 0.1f);
     const float sdt = dt * std::max(0.1f, cfg.animation.timeScale);
+
+    // Live options: screenshot visibility and target monitor
+    const int affinity = cfg.island.hideFromScreenshots ? 0x00000011 /* WDA_EXCLUDEFROMCAPTURE */ : 0 /* WDA_NONE */;
+    if (m_hwnd && affinity != m_affinityApplied) {
+        SetWindowDisplayAffinity(m_hwnd, affinity);
+        m_affinityApplied = affinity;
+    }
+    if (m_hwnd && cfg.monitorIndex != m_monitorApplied) {
+        const uint32_t oldW = m_windowWidth, oldH = m_windowHeight;
+        const float oldScale = m_dpiScale;
+        PositionWindow();
+        if (m_dcomp && (m_windowWidth != oldW || m_windowHeight != oldH)) m_dcomp->Resize(m_windowWidth, m_windowHeight);
+        if (m_dpiScale != oldScale) CreateFonts();
+        UpdateTargetBounds();
+        m_boundsSpring.SnapTo(m_boundsSpring.GetTarget());
+        m_radiusSpring.SnapTo(m_radiusSpring.GetTarget());
+        m_lastRegionBounds = Rect{-1.0f, -1.0f, -1.0f, -1.0f};
+    }
 
     // ---- data snapshot (UI thread only ever sees a cheap copy without the cover bytes) -------
     auto& media = media::MediaService::Instance();

@@ -54,6 +54,7 @@ struct DynamicIslandConfig {
     bool showClockIdle{true};
     bool showAudioVisualizer{true};
     bool mediaAutoExpand{false};
+    bool hideFromScreenshots{false}; // exclude the island from screenshots / screen recordings
     float notificationDismissSeconds{4.0f};
 };
 

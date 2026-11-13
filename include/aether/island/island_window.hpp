@@ -189,6 +189,8 @@ private:
     float m_barLevels[6]{};
     float m_barPhase[6]{0.0f, 1.3f, 2.6f, 3.9f, 5.2f, 0.7f};
 
+    int m_affinityApplied{-1};     // last display-affinity value applied (capture visibility)
+    int m_monitorApplied{-1};      // last monitor index applied
     uint32_t m_windowWidth{880};
     uint32_t m_windowHeight{300};
     float m_dpiScale{1.0f};

@@ -110,6 +110,12 @@ void SettingsPages::RenderDynamicIsland() {
         UI::SettingRow("Show Audio Visualizer Bars", "Animate active audio playback equalizer bars inside the pill", [&](float) {
             UI::Toggle("##showAudioVisualizer", &cfg.showAudioVisualizer);
         });
+
+        UI::SettingRow("Hide Island From Screenshots", "When on, the island is invisible in screenshots and screen recordings (off = it is captured)", [&](float) {
+            if (UI::Toggle("##hideFromScreenshots", &cfg.hideFromScreenshots)) {
+                config::ConfigManager::Instance().Save();
+            }
+        });
     });
 }
 
