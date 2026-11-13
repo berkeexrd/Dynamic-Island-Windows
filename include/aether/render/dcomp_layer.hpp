@@ -45,9 +45,14 @@ public:
         const D2D1_POINT_2F& center, float radiusX, float radiusY
     );
     ComPtr<ID2D1StrokeStyle> CreateRoundedStrokeStyle();
-    ComPtr<ID2D1PathGeometry> CreateSquircleGeometry(const core::Rect& bounds, float radius);
+    // Continuous-curvature ("iOS style") rounded rectangle. `smoothing` 0 = plain circular corners,
+    // 0.6 = Apple-like squircle. It is clamped automatically when the radius approaches half the size
+    // (a capsule), so it can be animated from pill to card without popping.
+    ComPtr<ID2D1PathGeometry> CreateSquircleGeometry(const core::Rect& bounds, float radius, float smoothing = 0.6f);
 
     [[nodiscard]] ID2D1DeviceContext* GetContext() const { return m_d2dContext.Get(); }
+    // Swap-chain backed target bitmap (needed to restore the target after rendering into command lists)
+    [[nodiscard]] ID2D1Bitmap1* GetTargetBitmap() const { return m_d2dTargetBitmap.Get(); }
 
 private:
     bool CreateDeviceResources();

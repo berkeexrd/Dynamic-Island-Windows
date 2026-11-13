@@ -186,6 +186,9 @@ bool DCompLayer::CreateSwapChain(uint32_t width, uint32_t height) {
     if (FAILED(hr)) return false;
 
     m_d2dContext->SetTarget(m_d2dTargetBitmap.Get());
+    m_d2dContext->SetDpi(96.0f, 96.0f);
+    // ClearType cannot be used on a premultiplied-alpha surface; grayscale keeps text crisp and artifact free.
+    m_d2dContext->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
     return true;
 }
 
@@ -313,62 +316,82 @@ ComPtr<ID2D1StrokeStyle> DCompLayer::CreateRoundedStrokeStyle() {
     return style;
 }
 
-ComPtr<ID2D1PathGeometry> DCompLayer::CreateSquircleGeometry(const core::Rect& bounds, float radius) {
+ComPtr<ID2D1PathGeometry> DCompLayer::CreateSquircleGeometry(const core::Rect& bounds, float radius, float smoothing) {
     ComPtr<ID2D1PathGeometry> geometry;
     if (!m_d2dFactory) return geometry;
+    if (bounds.width <= 0.5f || bounds.height <= 0.5f) return geometry;
 
-    if (FAILED(m_d2dFactory->CreatePathGeometry(&geometry))) return geometry;
+    if (FAILED(m_d2dFactory->CreatePathGeometry(&geometry))) { geometry.Reset(); return geometry; }
 
     ComPtr<ID2D1GeometrySink> sink;
-    if (FAILED(geometry->Open(&sink))) return geometry;
+    if (FAILED(geometry->Open(&sink))) { geometry.Reset(); return geometry; }
 
-    float x = bounds.Left();
-    float y = bounds.Top();
-    float w = bounds.width;
-    float h = bounds.height;
+    const float l = bounds.Left(),  t = bounds.Top();
+    const float r = bounds.Right(), b = bounds.Bottom();
 
-    // Squircle curvature blend factor (Apple G2 curvature continuity)
-    float k = std::min(radius * 1.5286f, std::min(w, h) * 0.5f);
-    float cpRatio = 0.45f;
+    const float budget = std::min(bounds.width, bounds.height) * 0.5f;
+    const float R = std::clamp(radius, 0.0f, budget);
 
-    // Start at top edge
-    sink->BeginFigure(D2D1::Point2F(x + k, y), D2D1_FIGURE_BEGIN_FILLED);
+    if (R < 0.5f) {
+        sink->BeginFigure(D2D1::Point2F(l, t), D2D1_FIGURE_BEGIN_FILLED);
+        sink->AddLine(D2D1::Point2F(r, t));
+        sink->AddLine(D2D1::Point2F(r, b));
+        sink->AddLine(D2D1::Point2F(l, b));
+        sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+        sink->Close();
+        return geometry;
+    }
 
-    // Top edge -> Top-right corner
-    sink->AddLine(D2D1::Point2F(x + w - k, y));
-    sink->AddBezier(D2D1::BezierSegment(
-        D2D1::Point2F(x + w - k * cpRatio, y),
-        D2D1::Point2F(x + w, y + k * cpRatio),
-        D2D1::Point2F(x + w, y + k)
-    ));
+    // Figma-style corner smoothing: every corner is [cubic, arc, cubic] so curvature ramps up
+    // gradually instead of jumping from 0 to 1/R like a plain rounded rectangle.
+    const float maxSmoothing = budget / R - 1.0f;
+    const float s = std::clamp(smoothing, 0.0f, std::max(0.0f, maxSmoothing));
+    const float p = std::min((1.0f + s) * R, budget);
 
-    // Right edge -> Bottom-right corner
-    sink->AddLine(D2D1::Point2F(x + w, y + h - k));
-    sink->AddBezier(D2D1::BezierSegment(
-        D2D1::Point2F(x + w, y + h - k * cpRatio),
-        D2D1::Point2F(x + w - k * cpRatio, y + h),
-        D2D1::Point2F(x + w - k, y + h)
-    ));
+    constexpr float kDeg = 3.14159265358979f / 180.0f;
+    const float arcMeasure = 90.0f * (1.0f - s);
+    const float arcLen     = std::sin(arcMeasure * 0.5f * kDeg) * R * 1.41421356f;
+    const float alphaDeg   = (90.0f - arcMeasure) * 0.5f;
+    const float p3p4       = R * std::tan(alphaDeg * 0.5f * kDeg);
+    const float betaDeg    = 45.0f * s;
+    const float c          = p3p4 * std::cos(betaDeg * kDeg);
+    const float d          = c * std::tan(betaDeg * kDeg);
+    const float bb         = (p - arcLen - c - d) / 3.0f;
+    const float a          = 2.0f * bb;
 
-    // Bottom edge -> Bottom-left corner
-    sink->AddLine(D2D1::Point2F(x + k, y + h));
-    sink->AddBezier(D2D1::BezierSegment(
-        D2D1::Point2F(x + k * cpRatio, y + h),
-        D2D1::Point2F(x, y + h - k * cpRatio),
-        D2D1::Point2F(x, y + h - k)
-    ));
+    struct Corner { D2D1_POINT_2F o; D2D1_POINT_2F e1; D2D1_POINT_2F e2; };
+    // Clockwise: top-right, bottom-right, bottom-left, top-left.
+    // e1 = direction we arrive travelling, e2 = direction we leave travelling.
+    const Corner corners[4] = {
+        { D2D1::Point2F(r, t), D2D1::Point2F( 1.0f,  0.0f), D2D1::Point2F( 0.0f,  1.0f) },
+        { D2D1::Point2F(r, b), D2D1::Point2F( 0.0f,  1.0f), D2D1::Point2F(-1.0f,  0.0f) },
+        { D2D1::Point2F(l, b), D2D1::Point2F(-1.0f,  0.0f), D2D1::Point2F( 0.0f, -1.0f) },
+        { D2D1::Point2F(l, t), D2D1::Point2F( 0.0f, -1.0f), D2D1::Point2F( 1.0f,  0.0f) },
+    };
 
-    // Left edge -> Top-left corner
-    sink->AddLine(D2D1::Point2F(x, y + k));
-    sink->AddBezier(D2D1::BezierSegment(
-        D2D1::Point2F(x, y + k * cpRatio),
-        D2D1::Point2F(x + k * cpRatio, y),
-        D2D1::Point2F(x + k, y)
-    ));
+    auto pt = [](const Corner& k, float u, float v) {
+        return D2D1::Point2F(k.o.x + k.e1.x * u + k.e2.x * v, k.o.y + k.e1.y * u + k.e2.y * v);
+    };
+
+    for (int i = 0; i < 4; ++i) {
+        const Corner& k = corners[i];
+        const D2D1_POINT_2F start = pt(k, -p, 0.0f);
+        if (i == 0) sink->BeginFigure(start, D2D1_FIGURE_BEGIN_FILLED);
+        else        sink->AddLine(start);
+
+        const float u3 = -p + a + bb + c;
+        sink->AddBezier(D2D1::BezierSegment(pt(k, -p + a, 0.0f), pt(k, -p + a + bb, 0.0f), pt(k, u3, d)));
+
+        const float u4 = u3 + arcLen;
+        const float v4 = d + arcLen;
+        sink->AddArc(D2D1::ArcSegment(pt(k, u4, v4), D2D1::SizeF(R, R), 0.0f,
+                                      D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+
+        sink->AddBezier(D2D1::BezierSegment(pt(k, u4 + d, v4 + c), pt(k, u4 + d, v4 + bb + c), pt(k, 0.0f, p)));
+    }
 
     sink->EndFigure(D2D1_FIGURE_END_CLOSED);
     sink->Close();
-
     return geometry;
 }
 

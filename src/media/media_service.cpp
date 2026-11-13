@@ -6,6 +6,8 @@
 #include <wrl/client.h>
 #include <mmdeviceapi.h>
 #include <endpointvolume.h>
+#include <chrono>
+#include <algorithm>
 
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
@@ -25,6 +27,7 @@ void MediaService::Initialize() {
     QueryMasterVolume();
     m_running = true;
     m_workerThread = std::thread(&MediaService::WorkerLoop, this);
+    m_meterThread = std::thread(&MediaService::MeterLoop, this);
     m_initialized = true;
     AETHER_LOG_INFO("MediaService initialized with active GSMTC worker thread");
 }
@@ -35,6 +38,9 @@ void MediaService::Shutdown() {
     m_running = false;
     if (m_workerThread.joinable()) {
         m_workerThread.join();
+    }
+    if (m_meterThread.joinable()) {
+        m_meterThread.join();
     }
 
     s_sessionManager = nullptr;
@@ -84,6 +90,11 @@ void MediaService::WorkerLoop() {
 
     std::wstring lastTitle = L"";
     PlaybackStatus lastStatus = PlaybackStatus::Stopped;
+    // Album art is fetched a few times right after a track change (players often publish the
+    // thumbnail a moment after the title) and then left alone - it used to be re-read every poll.
+    std::wstring artTitle = L"";
+    int artTries = 0;
+    bool artDone = false;
 
     while (m_running) {
         try {
@@ -105,7 +116,7 @@ void MediaService::WorkerLoop() {
                     } catch (...) {}
 
                     std::vector<uint8_t> artBytes;
-                    bool shouldReadArt = (title != lastTitle) || m_currentTrack.albumArtBytes.empty();
+                    bool shouldReadArt = false;
 
                     try {
                         auto props = session.TryGetMediaPropertiesAsync().get();
@@ -113,6 +124,16 @@ void MediaService::WorkerLoop() {
                             title = props.Title().c_str();
                             artist = props.Artist().c_str();
                             album = props.AlbumTitle().c_str();
+
+                            if (title != artTitle) {
+                                artTitle = title;
+                                artTries = 0;
+                                artDone = false;
+                            }
+                            if (!artDone && artTries < 6 && !title.empty()) {
+                                shouldReadArt = true;
+                                ++artTries;
+                            }
 
                             if (shouldReadArt) {
                                 auto thumbRef = props.Thumbnail();
@@ -156,9 +177,15 @@ void MediaService::WorkerLoop() {
                     bool trackSwitched = false;
                     {
                         std::lock_guard<std::mutex> lock(m_mutex);
-                        if (m_currentTrack.title != title || m_currentTrack.status != status) {
+                        const bool titleChanged = (m_currentTrack.title != title);
+                        if (titleChanged || m_currentTrack.status != status) {
                             trackSwitched = true;
                             changed = true;
+                        }
+                        if (titleChanged && !m_currentTrack.albumArtBytes.empty()) {
+                            // Never keep showing the previous song's cover.
+                            m_currentTrack.albumArtBytes.clear();
+                            ++m_currentTrack.artVersion;
                         }
                         if (m_currentTrack.durationSeconds != durSec) {
                             changed = true;
@@ -171,10 +198,12 @@ void MediaService::WorkerLoop() {
                         m_currentTrack.status = status;
                         m_currentTrack.durationSeconds = durSec;
                         if (shouldReadArt && !artBytes.empty()) {
-                            m_currentTrack.albumArtBytes = std::move(artBytes);
-                            changed = true;
-                        } else if (trackSwitched && artBytes.empty()) {
-                            m_currentTrack.albumArtBytes.clear();
+                            if (artBytes != m_currentTrack.albumArtBytes) {
+                                m_currentTrack.albumArtBytes = std::move(artBytes);
+                                ++m_currentTrack.artVersion;
+                                changed = true;
+                            }
+                            if (artTries >= 2) artDone = true;
                         }
                         // Resync position if significant jump or new track
                         if (trackSwitched) {
@@ -194,9 +223,9 @@ void MediaService::WorkerLoop() {
                             << "' by '" << winrt::to_string(artist) 
                             << "' (" << winrt::to_string(appName) << ") | Duration: " 
                             << static_cast<int>(durSec) << "s");
-                        core::EventBus::Instance().Publish(MediaChangedEvent{GetCurrentTrack()});
+                        core::EventBus::Instance().Publish(MediaChangedEvent{GetTrackLite()});
                     } else if (changed) {
-                        core::EventBus::Instance().Publish(MediaChangedEvent{GetCurrentTrack()});
+                        core::EventBus::Instance().Publish(MediaChangedEvent{GetTrackLite()});
                     }
                 } else {
                     bool hadMedia = false;
@@ -209,7 +238,7 @@ void MediaService::WorkerLoop() {
                     if (hadMedia) {
                         lastTitle = L"";
                         lastStatus = PlaybackStatus::Stopped;
-                        core::EventBus::Instance().Publish(MediaChangedEvent{GetCurrentTrack()});
+                        core::EventBus::Instance().Publish(MediaChangedEvent{GetTrackLite()});
                     }
                 }
             }
@@ -256,6 +285,29 @@ void MediaService::QueryMasterVolume() {
 MediaTrackInfo MediaService::GetCurrentTrack() const {
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_currentTrack;
+}
+
+MediaTrackInfo MediaService::GetTrackLite() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    MediaTrackInfo t;
+    t.title = m_currentTrack.title;
+    t.artist = m_currentTrack.artist;
+    t.albumTitle = m_currentTrack.albumTitle;
+    t.sourceApp = m_currentTrack.sourceApp;
+    t.status = m_currentTrack.status;
+    t.durationSeconds = m_currentTrack.durationSeconds;
+    t.positionSeconds = m_currentTrack.positionSeconds;
+    t.hasMedia = m_currentTrack.hasMedia;
+    t.artVersion = m_currentTrack.artVersion;
+    return t;
+}
+
+bool MediaService::FetchAlbumArt(uint64_t& knownVersion, std::vector<uint8_t>& out) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_currentTrack.artVersion == knownVersion) return false;
+    knownVersion = m_currentTrack.artVersion;
+    out = m_currentTrack.albumArtBytes;
+    return true;
 }
 
 void MediaService::PlayPause() {
@@ -333,6 +385,88 @@ float MediaService::GetVolume() const {
 
 bool MediaService::IsMicrophoneActive() const {
     return m_micActive;
+}
+
+bool MediaService::IsCameraActive() const {
+    return m_camActive;
+}
+
+// Windows records, per app, when it last started/stopped using a capability. An app that started
+// and has not stopped yet (Stop == 0 or Start > Stop) is using the mic/camera right now.
+static bool ReadLastUsedActive(HKEY key) {
+    ULONGLONG start = 0, stop = 0;
+    DWORD size = sizeof(start);
+    if (RegGetValueW(key, nullptr, L"LastUsedTimeStart", RRF_RT_REG_QWORD, nullptr, &start, &size) != ERROR_SUCCESS) return false;
+    size = sizeof(stop);
+    if (RegGetValueW(key, nullptr, L"LastUsedTimeStop", RRF_RT_REG_QWORD, nullptr, &stop, &size) != ERROR_SUCCESS) return false;
+    return start != 0 && start > stop;
+}
+
+static bool CapabilityInUseUnder(const std::wstring& path) {
+    HKEY root = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, path.c_str(), 0, KEY_READ, &root) != ERROR_SUCCESS) return false;
+    bool active = false;
+    wchar_t name[512];
+    for (DWORD i = 0; !active; ++i) {
+        DWORD len = ARRAYSIZE(name);
+        if (RegEnumKeyExW(root, i, name, &len, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) break;
+        HKEY sub = nullptr;
+        if (RegOpenKeyExW(root, name, 0, KEY_READ, &sub) == ERROR_SUCCESS) {
+            active = ReadLastUsedActive(sub);
+            RegCloseKey(sub);
+        }
+    }
+    RegCloseKey(root);
+    return active;
+}
+
+static bool IsCapabilityInUse(const wchar_t* capability) {
+    std::wstring base = L"Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\";
+    base += capability;
+    return CapabilityInUseUnder(base) || CapabilityInUseUnder(base + L"\\NonPackaged");
+}
+
+void MediaService::MeterLoop() {
+    const bool comOk = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+    Microsoft::WRL::ComPtr<IAudioMeterInformation> meter;
+    auto lastAcquire = std::chrono::steady_clock::time_point{};
+    auto lastPrivacy = std::chrono::steady_clock::time_point{};
+
+    while (m_running) {
+        const auto now = std::chrono::steady_clock::now();
+
+        // (Re)bind to the default speakers every few seconds so device switches are picked up.
+        if (!meter || now - lastAcquire > std::chrono::seconds(3)) {
+            lastAcquire = now;
+            meter.Reset();
+            Microsoft::WRL::ComPtr<IMMDeviceEnumerator> enumerator;
+            if (SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator)))) {
+                Microsoft::WRL::ComPtr<IMMDevice> dev;
+                if (SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eRender, eMultimedia, &dev))) {
+                    dev->Activate(__uuidof(IAudioMeterInformation), CLSCTX_ALL, nullptr, (void**)&meter);
+                }
+            }
+        }
+
+        float peak = 0.0f;
+        if (meter && SUCCEEDED(meter->GetPeakValue(&peak))) {
+            m_audioPeak = std::clamp(peak, 0.0f, 1.0f);
+        } else {
+            meter.Reset();
+            m_audioPeak = 0.0f;
+        }
+
+        if (now - lastPrivacy > std::chrono::milliseconds(1000)) {
+            lastPrivacy = now;
+            m_micActive = IsCapabilityInUse(L"microphone");
+            m_camActive = IsCapabilityInUse(L"webcam");
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+
+    meter.Reset();
+    if (comOk) CoUninitialize();
 }
 
 } // namespace aether::media

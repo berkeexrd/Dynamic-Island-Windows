@@ -29,6 +29,7 @@ struct MediaTrackInfo {
     double positionSeconds{0.0};
     std::vector<uint8_t> albumArtBytes;
     bool hasMedia{false};
+    uint64_t artVersion{0};   // bumps every time albumArtBytes changes
 };
 
 struct MediaChangedEvent {
@@ -46,7 +47,12 @@ public:
     void Shutdown();
     void Update(float dt);
 
+    // Full snapshot (copies the album art bytes - avoid calling this every frame).
     [[nodiscard]] MediaTrackInfo GetCurrentTrack() const;
+    // Cheap snapshot without album art, safe to call every frame.
+    [[nodiscard]] MediaTrackInfo GetTrackLite() const;
+    // Copies album art only if it differs from `knownVersion`. Returns true when `out` was filled.
+    bool FetchAlbumArt(uint64_t& knownVersion, std::vector<uint8_t>& out) const;
 
     // Controls
     void PlayPause();
@@ -57,20 +63,27 @@ public:
     [[nodiscard]] float GetVolume() const;
 
     [[nodiscard]] bool IsMicrophoneActive() const;
+    [[nodiscard]] bool IsCameraActive() const;
+    // Peak level (0..1) of whatever is currently rendered to the default speakers - drives the visualizer.
+    [[nodiscard]] float GetAudioPeak() const { return m_audioPeak.load(); }
 
 private:
     MediaService() = default;
     ~MediaService() { Shutdown(); }
 
     void WorkerLoop();
+    void MeterLoop();
     void QueryMasterVolume();
 
     mutable std::mutex m_mutex;
     MediaTrackInfo m_currentTrack;
     std::atomic<float> m_masterVolume{0.5f};
     std::atomic<bool> m_micActive{false};
+    std::atomic<bool> m_camActive{false};
+    std::atomic<float> m_audioPeak{0.0f};
     std::atomic<bool> m_running{false};
     std::thread m_workerThread;
+    std::thread m_meterThread;
     bool m_initialized{false};
 };
 

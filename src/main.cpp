@@ -186,6 +186,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
         // Only sleep when 100% idle and resting to yield 0% CPU.
         if (!isAnimating) {
             MsgWaitForMultipleObjectsEx(0, nullptr, 250, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        } else if (island && !island->IsSpringDriven() && !ui::SettingsWindow::Instance().IsVisible()) {
+            // Only ambient motion (audio bars, scrolling title): 60 fps is plenty and saves GPU/CPU.
+            MsgWaitForMultipleObjectsEx(0, nullptr, 16, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         }
     }
 
