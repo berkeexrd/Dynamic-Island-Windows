@@ -10,6 +10,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), versions follow
 - `Aether.exe --record <folder> [--fps 60] [--seconds 19]` renders on a virtual clock and saves every frame as PNG (frame-locked, no dropped frames), with a scripted tour of the whole shell (island states, notification, Start menu, desktop menu, Explorer, Recycle Bin, then every colour theme); steps that open other programs are timed in real time (frames.ffconcat keeps each frame's duration); recordings are always in English and the original theme and wallpaper are restored. `tools\record_showcase.bat` records and builds an MP4, `tools\make_video.bat` converts existing frames (needs ffmpeg).
 - Release builds really use the quiet log level now (a hard-coded Debug level in `main.cpp` overrode it).
 
+### Explorer crash after deleting files
+- Fixed a crash right after deleting files: the refreshed folder list was read with the old (longer) selection indices.
+
 ### Island notifications, widget text overflow
 - New Windows toasts (messages, calls, any app, including a phone linked through Phone Link) now pop out of the Dynamic Island; nothing is replayed at startup and gaming mode can suppress them.
 - Long titles in widgets (e.g. the now-playing card) end in an ellipsis instead of overflowing the card.

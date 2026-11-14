@@ -392,7 +392,7 @@ private:
     void Refresh();
     void StartFolderLoad();
     void StartHomeLoad();
-    void RebuildView();
+    void RebuildView(const std::set<std::wstring>* keepIn = nullptr);   // keepIn: names to keep selected (taken from the OLD list when m_items is replaced)
     void OnFolderResult(FolderResult* r);
     void OnHomeResult(HomeData* d);
     void OpenEntry(int viewIndex);
@@ -1356,8 +1356,13 @@ void Explorer::OnFolderResult(FolderResult* r) {
     m_loadFailed = !res->ok;
     if (!res->ok && IsFtp(m_path)) { auto& P = Passwords(); std::lock_guard<std::mutex> lk(P.mu); P.pass.erase(FtpKey(ParseFtp(m_path))); }
     m_deep = res->deep;
+    // m_view / m_sel still index the OLD list: read the selected names from it BEFORE the list is replaced (after a delete the
+    // new list is shorter, and indexing it with the old indices ran past the end and crashed the window)
+    std::set<std::wstring> keepNames;
+    for (size_t i = 0; i < m_view.size() && i < m_sel.size(); ++i)
+        if (m_sel[i] && m_view[i] >= 0 && m_view[i] < static_cast<int>(m_items.size())) keepNames.insert(m_items[m_view[i]].name);
     m_items = std::move(res->items);
-    RebuildView();
+    RebuildView(&keepNames);
     if (m_deep) m_scroll = m_scrollTarget = 0;
     if (!m_pendingSelect.empty()) {
         for (size_t i = 0; i < m_view.size(); ++i)
@@ -1372,9 +1377,11 @@ void Explorer::OnFolderResult(FolderResult* r) {
     Kick();
 }
 
-void Explorer::RebuildView() {
+void Explorer::RebuildView(const std::set<std::wstring>* keepIn) {
     std::set<std::wstring> keep;
-    for (size_t i = 0; i < m_view.size() && i < m_sel.size(); ++i) if (m_sel[i]) keep.insert(m_items[m_view[i]].name);
+    if (keepIn) keep = *keepIn;
+    else for (size_t i = 0; i < m_view.size() && i < m_sel.size(); ++i)
+        if (m_sel[i] && m_view[i] >= 0 && m_view[i] < static_cast<int>(m_items.size())) keep.insert(m_items[m_view[i]].name);
     m_view.clear();
     for (size_t i = 0; i < m_items.size(); ++i) {
         if (m_items[i].hidden && !m_showHidden) continue;

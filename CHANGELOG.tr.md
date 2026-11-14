@@ -7,6 +7,9 @@
 - `Aether.exe --record <klasör> [--fps 60] [--seconds 19]` sanal saatle çalışıp her kareyi PNG olarak kaydeder (kare kaçırmaz) ve tüm kabuğu otomatik gezer (ada modları, bildirim, Başlat menüsü, masaüstü menüsü, Explorer, Geri Dönüşüm Kutusu, sonda her renk teması); başka programları açan adımlar gerçek zamanlı kaydedilir (frames.ffconcat her karenin süresini tutar); kayıtlar her zaman İngilizcedir ve özgün tema ile duvar kağıdı geri yüklenir. `tools\record_showcase.bat` kaydedip MP4 üretir, `tools\make_video.bat` mevcut kareleri videoya çevirir (ffmpeg gerekir).
 - Release derlemesi artık gerçekten sessiz log seviyesini kullanıyor (`main.cpp`'deki sabit Debug seviyesi bunu eziyordu).
 
+### Dosya silince Explorer çökmesi
+- Dosyalar silindikten hemen sonra uygulamanın çökmesi düzeltildi: yenilenen klasör listesi eski (daha uzun) seçim dizinleriyle okunuyordu.
+
 ### Adada bildirimler, widget yazı taşması
 - Yeni Windows bildirimleri (mesaj, arama, her uygulama; Telefon Bağlantısı ile bağlı telefon dahil) artık Dynamic Island'da beliriyor; açılışta eskiler tekrar gösterilmez, oyun modu bastırabilir.
 - Widget'lardaki uzun başlıklar (ör. çalan parça kartı) kartın dışına taşmak yerine üç noktayla bitiyor.
