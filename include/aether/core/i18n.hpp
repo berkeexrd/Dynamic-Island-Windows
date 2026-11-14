@@ -43,6 +43,10 @@ inline void PollLanguageFile() {
     FileMode() = !strncmp(b, "en", 2) ? 1 : (!strncmp(b, "tr", 2) ? 2 : 0);
 }
 
+// An explicit English choice (command line, language file, recording) must also give English dates, whatever Windows uses.
+inline bool ExplicitEnglish();
+inline const wchar_t* Loc() { return ExplicitEnglish() ? L"en-US" : LOCALE_NAME_USER_DEFAULT; }
+
 inline bool Turkish() {
     if (Mode() == 1) return false;
     if (Mode() == 2) return true;
@@ -53,27 +57,31 @@ inline bool Turkish() {
     return system;
 }
 
+inline bool ExplicitEnglish() { return Mode() == 1 || (Mode() == 0 && FileMode() == 1); }
+
 inline const wchar_t* Pick(const wchar_t* en, const wchar_t* tr) { return Turkish() ? tr : en; }
 
 // Month / weekday names come straight from Windows (the user's regional language), so every language works.
 inline const wchar_t* Month(int m /*1..12*/) {
     if (m < 1 || m > 12) return L"";
-    static std::wstring cache[12];
+    static std::wstring cache[12]; static const wchar_t* seen = nullptr;
+    if (seen != Loc()) { for (auto& x : cache) x.clear(); seen = Loc(); }
     std::wstring& c = cache[m - 1];
     if (c.empty()) {
         wchar_t b[64] = {};
-        if (GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_SMONTHNAME1 + (m - 1), b, 64) > 0) c = b; else c = L"?";
+        if (GetLocaleInfoEx(Loc(), LOCALE_SMONTHNAME1 + (m - 1), b, 64) > 0) c = b; else c = L"?";
     }
     return c.c_str();
 }
 
 inline const wchar_t* Weekday(int dow /*0 = Sunday*/) {
     if (dow < 0 || dow > 6) return L"";
-    static std::wstring cache[7];
+    static std::wstring cache[7]; static const wchar_t* seen = nullptr;
+    if (seen != Loc()) { for (auto& x : cache) x.clear(); seen = Loc(); }
     std::wstring& c = cache[dow];
     if (c.empty()) {
         wchar_t b[64] = {};
-        if (GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_SDAYNAME1 + ((dow + 6) % 7), b, 64) > 0) c = b; else c = L"?";
+        if (GetLocaleInfoEx(Loc(), LOCALE_SDAYNAME1 + ((dow + 6) % 7), b, 64) > 0) c = b; else c = L"?";
     }
     return c.c_str();
 }
@@ -82,9 +90,9 @@ inline const wchar_t* Weekday(int dow /*0 = Sunday*/) {
 inline std::wstring LongDate(const SYSTEMTIME& st) {
     wchar_t md[48] = {};
     std::wstring fmt = L"dddd, ";
-    if (GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_SMONTHDAY, md, 48) > 0) fmt += md; else fmt += L"d MMMM";
+    if (GetLocaleInfoEx(Loc(), LOCALE_SMONTHDAY, md, 48) > 0) fmt += md; else fmt += L"d MMMM";
     wchar_t buf[96] = {};
-    if (GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, 0, &st, fmt.c_str(), buf, 96, nullptr) > 0) return buf;
+    if (GetDateFormatEx(Loc(), 0, &st, fmt.c_str(), buf, 96, nullptr) > 0) return buf;
     swprintf(buf, 96, L"%ls, %d %ls", Weekday(st.wDayOfWeek), st.wDay, Month(st.wMonth));
     return buf;
 }
@@ -93,7 +101,7 @@ inline std::wstring LongDate(const SYSTEMTIME& st) {
 inline std::wstring ShortDate(const SYSTEMTIME& st) {
     wchar_t buf[48];
     if (Turkish()) { swprintf(buf, 48, L"%02d.%02d.%04d", st.wDay, st.wMonth, st.wYear); return buf; }
-    if (GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, DATE_SHORTDATE, &st, nullptr, buf, 48, nullptr) > 0) return buf;
+    if (GetDateFormatEx(Loc(), DATE_SHORTDATE, &st, nullptr, buf, 48, nullptr) > 0) return buf;
     swprintf(buf, 48, L"%d/%d/%d", st.wMonth, st.wDay, st.wYear);
     return buf;
 }

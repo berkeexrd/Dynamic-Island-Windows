@@ -33,7 +33,7 @@ namespace {
 // The margin must be wider than the glow reaches (sigma 13-16 -> ~3 sigma), otherwise the halo is cut off at the window edge.
 constexpr float kPad = 36.0f;
 constexpr float kCardW = 264.0f;
-constexpr float kCardH[6] = {138.0f, 112.0f, 92.0f, 150.0f, 178.0f, 96.0f};   // performance, network, clock, storage, weather, now playing
+constexpr float kCardH[6] = {138.0f, 112.0f, 92.0f, 150.0f, 200.0f, 96.0f};   // performance, network, clock, storage, weather, now playing
 constexpr float kRadius = 20.0f;
 // The clock has no card in the concept: big thin digits, date above, weather below.
 constexpr float kClockW = 340.0f;
@@ -182,6 +182,12 @@ bool DesktopWidgetWindow::Create() {
                 f->SetTextAlignment(al);
                 f->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
                 f->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+                // long titles end in an ellipsis instead of running out of the card
+                ComPtr<IDWriteInlineObject> ell;
+                if (SUCCEEDED(dwrite->CreateEllipsisTrimmingSign(f.Get(), &ell))) {
+                    const DWRITE_TRIMMING trim{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
+                    f->SetTrimming(&trim, ell.Get());
+                }
             }
         };
         make(m_fontLarge,  display, DWRITE_FONT_WEIGHT_SEMI_BOLD, 27.0f, DWRITE_TEXT_ALIGNMENT_LEADING);   // clock
@@ -194,18 +200,21 @@ bool DesktopWidgetWindow::Create() {
         make(m_fontClock,  display, DWRITE_FONT_WEIGHT_LIGHT,    112.0f, DWRITE_TEXT_ALIGNMENT_CENTER);    // card-less clock
         make(m_fontDate,   text,    DWRITE_FONT_WEIGHT_NORMAL,    19.0f, DWRITE_TEXT_ALIGNMENT_CENTER);    // date above the clock
         make(m_fontInfo,   text,    DWRITE_FONT_WEIGHT_NORMAL,    16.5f, DWRITE_TEXT_ALIGNMENT_LEADING);   // weather line below it
+        make(m_fontTinyL,  text,    DWRITE_FONT_WEIGHT_NORMAL,     9.5f, DWRITE_TEXT_ALIGNMENT_LEADING);
         make(m_fontTinyR,  text,    DWRITE_FONT_WEIGHT_NORMAL,     9.5f, DWRITE_TEXT_ALIGNMENT_TRAILING);  // storage usage
     }
 
     // Place near desktop level (bottom of Z-order)
     SetWindowPos(m_hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-    ShowWindow(m_hwnd, SW_SHOWNOACTIVATE);
+    m_shownNow = false;          // Update() shows the card as soon as the config allows it (the master switch can be off at start)
     return true;
 }
 
 void DesktopWidgetWindow::Show(bool show) {
     if (m_hwnd) {
-        ShowWindow(m_hwnd, show ? SW_SHOWNOACTIVATE : SW_HIDE);
+        // hiding is immediate; showing is left to Update(), which also honours the user's own on/off switches
+        if (!show) ShowWindow(m_hwnd, SW_HIDE);
+        m_shownNow = false;
     }
 }
 
@@ -222,7 +231,15 @@ void DesktopWidgetWindow::Update(float dt) {
         case WidgetType::NowPlaying:    c = &w.nowWidget; break;
     }
     const bool want = w.enabled && c && c->enabled;
-    if (want != m_shownNow && m_hwnd) { m_shownNow = want; ShowWindow(m_hwnd, want ? SW_SHOWNOACTIVATE : SW_HIDE); }
+    if (want != m_shownNow && m_hwnd) {
+        m_shownNow = want;
+        ShowWindow(m_hwnd, want ? SW_SHOWNOACTIVATE : SW_HIDE);
+        if (want) { m_appear = config::ConfigManager::Instance().Get().animation.reducedMotion ? 1.0f : 0.0f; m_delay = 0.30f + Slot(m_type) * 0.12f; }   // cards rise in one after another
+    }
+    if (m_shownNow && m_appear < 1.0f) {
+        if (m_delay > 0.0f) m_delay -= dt;
+        else m_appear = std::min(1.0f, m_appear + dt / 0.65f);
+    }
 }
 
 void DesktopWidgetWindow::DrawText(ID2D1DeviceContext* ctx, const std::wstring& t, IDWriteTextFormat* f, const D2D1_RECT_F& r, const core::Color& c) {
@@ -337,13 +354,22 @@ void DesktopWidgetWindow::Render() {
     }
     auto ctx = m_dcomp->BeginDraw();
     if (!ctx) return;
-    ctx->SetTransform(D2D1::Matrix3x2F::Scale(s, s));
+    // entrance: fade in, rise ~20 px and grow from 94 % (ease-out cubic); identity once finished
+    const bool intro = m_appear < 1.0f;
+    const float e = 1.0f - std::pow(1.0f - std::clamp(m_appear, 0.0f, 1.0f), 3.0f);
+    D2D1::Matrix3x2F anim = D2D1::Matrix3x2F::Identity();
+    if (intro) {
+        const float cx = kPad + CardW(m_type) * 0.5f, cy = kPad + CardH(m_type) * 0.5f, sc = 0.94f + 0.06f * e;
+        anim = D2D1::Matrix3x2F::Translation(-cx, -cy) * D2D1::Matrix3x2F::Scale(sc, sc) * D2D1::Matrix3x2F::Translation(cx, cy + (1.0f - e) * 20.0f);
+        ctx->PushLayer(D2D1::LayerParameters1(D2D1::InfiniteRect(), nullptr, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1::IdentityMatrix(), e, nullptr, D2D1_LAYER_OPTIONS1_NONE), nullptr);
+    }
+    ctx->SetTransform(anim * D2D1::Matrix3x2F::Scale(s, s));
     if (!cardless) {
         render::DrawGlassGlow(ctx, silhouette.Get(), 1.0f, 0.8f);
         if (body) render::DrawGlassBody(ctx, m_dcomp.get(), m_brush.Get(), body.Get(), card, 1.0f, 0.9f);
     }
 
-    ctx->SetTransform(D2D1::Matrix3x2F::Translation(kPad, kPad) * D2D1::Matrix3x2F::Scale(s, s));   // card coordinates
+    ctx->SetTransform(D2D1::Matrix3x2F::Translation(kPad, kPad) * anim * D2D1::Matrix3x2F::Scale(s, s));   // card coordinates
     switch (m_type) {
         case WidgetType::SystemMonitor: RenderSystemMonitor(ctx); break;
         case WidgetType::ClockCalendar: RenderClockCalendar(ctx); break;
@@ -354,6 +380,7 @@ void DesktopWidgetWindow::Render() {
     }
 
     ctx->SetTransform(D2D1::Matrix3x2F::Identity());
+    if (intro) ctx->PopLayer();
     m_dcomp->EndDraw();
 }
 
@@ -553,31 +580,53 @@ void DesktopWidgetWindow::RenderWeather(ID2D1DeviceContext* ctx) {
     const bar::WeatherNow w = bar::WeatherService::Instance().Get();
     if (!w.valid) { DrawText(ctx, i18n::Pick(L"Loading weather...", L"Hava durumu yükleniyor..."), m_fontTitle.Get(), D2D1::RectF(18.0f, 10.0f, 246.0f, 34.0f), kMuted); return; }
     const auto kind = bar::WeatherService::KindOf(w.code, w.day);
-    MiniWeatherIcon(ctx, m_brush.Get(), 34.0f, 36.0f, 40.0f, kind, 0.0f);   // static: the cards redraw once a second, a spinning sun would stutter
-    wchar_t tb[16]; swprintf_s(tb, L"%d°C", w.tempC);
-    DrawText(ctx, tb, m_fontLarge.Get(), D2D1::RectF(66.0f, 12.0f, 180.0f, 44.0f), kText);
-    DrawText(ctx, bar::WeatherService::Describe(w.code, w.day), m_fontSmall.Get(), D2D1::RectF(67.0f, 40.0f, 246.0f, 56.0f), core::Color{0.90f, 0.89f, 0.96f, 1.0f});
-    DrawText(ctx, w.city, m_fontTiny.Get(), D2D1::RectF(67.0f, 55.0f, 180.0f, 68.0f), kMuted);
-    wchar_t hl[32]; swprintf_s(hl, L"%d° / %d°", w.hiC, w.loC);
-    DrawText(ctx, hl, m_fontSmall.Get(), D2D1::RectF(150.0f, 14.0f, 250.0f, 32.0f), kMuted);
+    const core::Color kRain{0.45f, 0.72f, 1.0f, 1.0f};
+    auto hline = [&](float y, float a) { m_brush->SetColor(D2D1::ColorF(kMuted.r, kMuted.g, kMuted.b, a)); ctx->DrawLine(D2D1::Point2F(18.0f, y), D2D1::Point2F(246.0f, y), m_brush.Get(), 1.0f); };
 
-    // temperature curve of the next hours
+    // header: icon, big temperature, condition + city, hi/lo + feels like on the right
+    MiniWeatherIcon(ctx, m_brush.Get(), 36.0f, 36.0f, 44.0f, kind, 0.0f);   // static: the cards redraw once a second, a spinning sun would stutter
+    wchar_t tb[16]; swprintf_s(tb, L"%d°", w.tempC);
+    DrawText(ctx, tb, m_fontLarge.Get(), D2D1::RectF(68.0f, 10.0f, 170.0f, 44.0f), kText);
+    DrawText(ctx, bar::WeatherService::Describe(w.code, w.day), m_fontSmall.Get(), D2D1::RectF(69.0f, 42.0f, 250.0f, 58.0f), core::Color{0.90f, 0.89f, 0.96f, 1.0f});
+    DrawText(ctx, w.city, m_fontTinyL.Get(), D2D1::RectF(69.0f, 58.0f, 170.0f, 71.0f), kMuted);
+    wchar_t hl[40]; swprintf_s(hl, L"↑%d°  ↓%d°", w.hiC, w.loC);
+    DrawText(ctx, hl, m_fontTinyR.Get(), D2D1::RectF(150.0f, 16.0f, 246.0f, 30.0f), kText);
+    wchar_t fl[48]; swprintf_s(fl, i18n::Pick(L"Feels like %d°", L"Hissedilen %d°"), w.feelsC);
+    DrawText(ctx, fl, m_fontTinyR.Get(), D2D1::RectF(130.0f, 32.0f, 246.0f, 46.0f), kMuted);
+
+    // stat row: humidity / wind / UV or rain
+    hline(78.0f, 0.18f);
+    struct Stat { wchar_t v[24]; const wchar_t* l; };
+    Stat st[3];
+    swprintf_s(st[0].v, L"%%%d", static_cast<int>(std::lround(w.humidity))); st[0].l = i18n::Pick(L"Humidity", L"Nem");
+    swprintf_s(st[1].v, L"%d km/h", static_cast<int>(std::lround(w.windKmh))); st[1].l = i18n::Pick(L"Wind", L"Rüzgar");
+    if (w.precipMm > 0.05f) { swprintf_s(st[2].v, L"%.1f mm", static_cast<double>(w.precipMm)); st[2].l = i18n::Pick(L"Rain", L"Yağış"); }
+    else { swprintf_s(st[2].v, L"%d", static_cast<int>(std::lround(w.uv))); st[2].l = L"UV"; }
+    for (int i = 0; i < 3; ++i) {
+        const float x0 = 18.0f + i * 76.0f;
+        DrawText(ctx, st[i].v, m_fontSmall.Get(), D2D1::RectF(x0, 82.0f, x0 + 76.0f, 98.0f), kText);
+        DrawText(ctx, st[i].l, m_fontTinyL.Get(), D2D1::RectF(x0, 97.0f, x0 + 76.0f, 110.0f), kMuted);
+    }
+    hline(116.0f, 0.18f);
+
+    // next hours: temperature curve, then icon + temperature + rain chance per column
     const int n = std::min<int>(5, static_cast<int>(w.hours.size()));
     if (n >= 2) {
         std::vector<float> v;
         int lo = 99, hi = -99;
         for (int i = 0; i < n; ++i) { lo = std::min(lo, w.hours[i].tempC); hi = std::max(hi, w.hours[i].tempC); }
         for (int i = 0; i < n; ++i) v.push_back(static_cast<float>(w.hours[i].tempC - lo + 1));
-        DrawSpark(ctx, v, static_cast<float>(hi - lo + 2), core::Rect{27.0f, 76.0f, 210.0f, 22.0f}, kAccent2, true);
+        DrawSpark(ctx, v, static_cast<float>(hi - lo + 2), core::Rect{27.0f, 150.0f, 210.0f, 14.0f}, kAccent2, true);
     }
     for (int i = 0; i < n; ++i) {
         const float cx = 27.0f + i * (210.0f / std::max(n - 1, 1));
         const auto& h = w.hours[i];
-        wchar_t hb[12]; if (i == 0) wcscpy_s(hb, i18n::Pick(L"Now", L"Şimdi")); else swprintf_s(hb, L"%02d", h.hour);
-        DrawText(ctx, hb, m_fontTiny.Get(), D2D1::RectF(cx - 22, 106.0f, cx + 22, 118.0f), kMuted);
-        MiniWeatherIcon(ctx, m_brush.Get(), cx, 132.0f, 20.0f, bar::WeatherService::KindOf(h.code, h.day), 0.0f);
+        wchar_t hb[12]; if (i == 0) wcscpy_s(hb, i18n::Pick(L"Now", L"Şimdi")); else swprintf_s(hb, L"%02d:00", h.hour);
+        DrawText(ctx, hb, m_fontTiny.Get(), D2D1::RectF(cx - 24, 121.0f, cx + 24, 133.0f), kMuted);
+        MiniWeatherIcon(ctx, m_brush.Get(), cx, 144.0f, 18.0f, bar::WeatherService::KindOf(h.code, h.day), 0.0f);
         wchar_t tb2[12]; swprintf_s(tb2, L"%d°", h.tempC);
-        DrawText(ctx, tb2, m_fontTiny.Get(), D2D1::RectF(cx - 22, 148.0f, cx + 22, 162.0f), kText);
+        DrawText(ctx, tb2, m_fontTiny.Get(), D2D1::RectF(cx - 24, 166.0f, cx + 24, 180.0f), kText);
+        if (h.rainPct >= 20) { wchar_t rb[12]; swprintf_s(rb, L"%%%d", h.rainPct); DrawText(ctx, rb, m_fontTiny.Get(), D2D1::RectF(cx - 24, 180.0f, cx + 24, 193.0f), kRain); }
     }
 }
 
@@ -790,7 +839,8 @@ void WidgetManager::Render() {
     static ULONGLONG last = 0;
     const ULONGLONG now = GetTickCount64();
     if (themeChanged) RedrawSoon();
-    const ULONGLONG interval = now < g_fastUntil.load() ? 200 : 1000;
+    const bool animating = IsAnimating() || m_frameByFrame;
+    const ULONGLONG interval = animating ? 0 : (now < g_fastUntil.load() ? 200 : 1000);
     if (now - last < interval) return;
     last = now;
     for (auto& w : m_widgets) {

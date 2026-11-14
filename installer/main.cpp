@@ -86,7 +86,7 @@ bool RegGetStr(HKEY root, const std::wstring& sub, const wchar_t* name, std::wst
     return true;
 }
 
-// Ends every running Aether process (the shell first, so it cannot restart the others). Returns true if the shell session was running.
+// Ends every running Aether process (the shell first, so it cannot restart the others). Returns true if anything of Aether was running.
 bool KillAether() {
     bool shellWas = false;
     const DWORD me = GetCurrentProcessId();
@@ -100,7 +100,7 @@ bool KillAether() {
             if ((pass == 0) != isShell) continue;
             for (const wchar_t* n : kExes) {
                 if (_wcsicmp(pe.szExeFile, n) != 0) continue;
-                if (isShell) shellWas = true;
+                shellWas = true;
                 if (HANDLE h = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pe.th32ProcessID)) { TerminateProcess(h, 0); WaitForSingleObject(h, 1500); CloseHandle(h); }
                 break;
             }
@@ -168,6 +168,24 @@ struct Progress {
 std::wstring ShellBackupPath() { const std::wstring a = Env(L"APPDATA"); return a.empty() ? L"" : a + L"\\Aether\\shell-backup.json"; }
 constexpr wchar_t kWinlogon[] = L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon";
 const wchar_t* const kFolderClasses[] = {L"Directory", L"Folder", L"Drive"};
+
+// An existing installation (HKCU uninstall entry + AetherShell.exe on disk): fills `o` with the options it was installed with,
+// so an update puts back exactly what the user had.
+bool DetectInstall(Opts& o) {
+    std::wstring dir, v;
+    if (!RegGetStr(HKEY_CURRENT_USER, kUninstKey, L"InstallLocation", dir) || dir.empty()) return false;
+    while (dir.size() > 3 && dir.back() == L'\\') dir.pop_back();
+    if (!Exists(dir + L"\\AetherShell.exe")) return false;
+    o.dir = dir;
+    o.bar = Exists(dir + L"\\AetherBar.exe"); o.desk = Exists(dir + L"\\AetherDesktop.exe"); o.expl = Exists(dir + L"\\AetherExplorer.exe");
+    o.replaceShell = RegGetStr(HKEY_CURRENT_USER, kWinlogon, L"Shell", v) && v.find(L"AetherShell") != std::wstring::npos;
+    o.autostart = RegGetStr(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", L"Aether", v);
+    o.folders = RegGetStr(HKEY_CURRENT_USER, L"Software\\Classes\\Directory\\shell\\open\\command", nullptr, v) && v.find(L"AetherExplorer") != std::wstring::npos;
+    o.intro = !Exists(Env(L"APPDATA") + L"\\Aether\\no-intro");
+    o.startLnk = Exists(Known(FOLDERID_Programs) + L"\\Aether\\Aether.lnk");
+    o.deskLnk = Exists(Known(FOLDERID_Desktop) + L"\\Aether.lnk");
+    return true;
+}
 
 bool Extract(const std::wstring& dir, Progress& pr) {
     MakeDirs(dir);
@@ -328,7 +346,7 @@ enum Page { P_WELCOME = 0, P_OPTIONS = 1, P_INSTALL = 2, P_DONE = 3 };
 
 class Setup {
 public:
-    bool uninstall{false}, silent{false};
+    bool uninstall{false}, silent{false}, update{false};     // update: Aether is already installed, so close it, reinstall over it and start it again, no questions
     std::wstring uninstDir;
 
     bool Create(HINSTANCE inst) {
@@ -374,6 +392,7 @@ private:
     float m_scale{1.0f};
     LARGE_INTEGER m_freq{}, m_last{}, m_t0{};
     int m_page{P_WELCOME};
+    float m_doneT{0.0f};
     float m_pageT{1.0f};
     Opts m_o;
     Progress m_pr;
@@ -446,9 +465,9 @@ private:
         const bool launched = m_page == P_DONE && !m_pr.failed;
         if (launched && !uninstall) {
             const std::wstring shell = m_o.dir + L"\\AetherShell.exe";
-            const bool relaunch = m_pr.wasShellSession || (m_o.launch && !m_o.replaceShell);
+            const bool relaunch = m_pr.wasShellSession || (update && !silent) || (m_o.launch && !m_o.replaceShell);
             if (relaunch && Exists(shell)) {
-                if (m_o.intro && m_o.launch && Exists(m_o.dir + L"\\AetherIntro.exe")) ShellExecuteW(nullptr, L"open", (m_o.dir + L"\\AetherIntro.exe").c_str(), L"--first", m_o.dir.c_str(), SW_SHOWNORMAL);
+                if (m_o.intro && m_o.launch && !update && Exists(m_o.dir + L"\\AetherIntro.exe")) ShellExecuteW(nullptr, L"open", (m_o.dir + L"\\AetherIntro.exe").c_str(), L"--first", m_o.dir.c_str(), SW_SHOWNORMAL);
                 ShellExecuteW(nullptr, L"open", shell.c_str(), nullptr, m_o.dir.c_str(), SW_SHOWNORMAL);
             }
         } else if (launched && uninstall && GetShellWindow() == nullptr) {       // we were running as the shell: give the user Windows' own back
@@ -670,7 +689,7 @@ private:
     void DrawProgress(float t) {
         const float x = kLeft + 44, w = kW - kLeft - 88;
         const bool failed = m_pr.failed;
-        m_g.Text(failed ? T(L"Bir sorun çıktı", L"Something went wrong") : (uninstall ? T(L"Kaldırılıyor...", L"Removing...") : T(L"Kuruluyor...", L"Installing...")), Rect{x, 84, w, 50}, 30.0f, 300, ink, DWRITE_TEXT_ALIGNMENT_LEADING);
+        m_g.Text(failed ? T(L"Bir sorun çıktı", L"Something went wrong") : (uninstall ? T(L"Kaldırılıyor...", L"Removing...") : update ? T(L"Güncelleniyor...", L"Updating...") : T(L"Kuruluyor...", L"Installing...")), Rect{x, 84, w, 50}, 30.0f, 300, ink, DWRITE_TEXT_ALIGNMENT_LEADING);
         const wchar_t* stepsIn[6] = {L"Çalışan Aether kapatılıyor", L"Dosyalar çıkarılıyor", L"Bileşenler hazırlanıyor", L"Kısayollar oluşturuluyor", L"Sistem kaydediliyor", L"Tamamlanıyor"};
         const wchar_t* stepsInE[6] = {L"Closing running Aether", L"Unpacking files", L"Preparing components", L"Creating shortcuts", L"Registering with the system", L"Finishing"};
         const wchar_t* stepsUn[5] = {L"Çalışan Aether kapatılıyor", L"Windows kabuğu geri yükleniyor", L"Kısayollar ve kayıtlar siliniyor", L"Dosyalar siliniyor", L"Tamamlanıyor"};
@@ -713,15 +732,16 @@ private:
         m_g.VGradientRR(c, 34 * s, vlight, violet);
         m_g.StrokeRR(c, 34 * s, Color{1, 1, 1, 0.5f}, 1.4f);
         m_g.Glyph(0xE73E, c, 30.0f, mg::kWhite);
-        m_g.Text(uninstall ? T(L"Aether kaldırıldı", L"Aether was removed") : T(L"Aether hazır!", L"Aether is ready!"), Rect{x, 214, w, 50}, 32.0f, 300, ink, DWRITE_TEXT_ALIGNMENT_LEADING);
+        m_g.Text(uninstall ? T(L"Aether kaldırıldı", L"Aether was removed") : update ? T(L"Aether güncellendi", L"Aether was updated") : T(L"Aether hazır!", L"Aether is ready!"), Rect{x, 214, w, 50}, 32.0f, 300, ink, DWRITE_TEXT_ALIGNMENT_LEADING);
         std::wstring msg;
         if (uninstall) msg = T(L"Her şey eski haline döndü. Windows kabuğu geri yüklendi.", L"Everything is back to how it was. The Windows shell was restored.");
+        else if (update) msg = T(L"Güncelleme tamamlandı. Aether şimdi otomatik olarak yeniden başlatılıyor.", L"The update is complete. Aether is being restarted automatically.");
         else if (m_o.replaceShell) msg = T(L"Aether, Windows kabuğu olarak ayarlandı. Oturumu kapatıp yeniden açtığında Aether açılır. Acil durumda oturum açarken SHIFT tuşunu basılı tut: normal Windows masaüstü gelir.",
                                           L"Aether is set as the Windows shell. It starts the next time you sign in. In an emergency hold SHIFT while signing in to get the normal Windows desktop.");
         else msg = T(L"Kurulum tamamlandı. Aether'i şimdi başlatabilir veya Başlat menüsünden açabilirsin.", L"Installation complete. You can start Aether now or open it from the Start menu.");
         m_g.TextBox(msg, Rect{x, 272, w, 100}, 14.5f, 400, WithA(ink, 0.82f), DWRITE_TEXT_ALIGNMENT_LEADING);
-        if (!uninstall && !m_o.replaceShell) Row(Rect{x, 392, w - 80, 44}, T(L"Aether'i şimdi başlat", L"Start Aether now"), L"", m_o.launch, 40, false, 1);
-        if (!uninstall && m_o.replaceShell) Button(Rect{x + 216, kH - 90, 200, 46}, T(L"Oturumu kapat", L"Sign out"), false, 41);
+        if (!uninstall && !update && !m_o.replaceShell) Row(Rect{x, 392, w - 80, 44}, T(L"Aether'i şimdi başlat", L"Start Aether now"), L"", m_o.launch, 40, false, 1);
+        if (!uninstall && !update && m_o.replaceShell) Button(Rect{x + 216, kH - 90, 200, 46}, T(L"Oturumu kapat", L"Sign out"), false, 41);
         Button(Rect{x, kH - 90, 200, 46}, uninstall ? T(L"Kapat", L"Close") : T(L"Bitir", L"Finish"), true, 10);
     }
 
@@ -737,7 +757,8 @@ private:
         }
         m_prog += (m_pr.value.load() - m_prog) * (1.0f - std::exp(-6.0f * dt));
         if (m_page == P_INSTALL && m_pr.done && m_prog > 0.985f) Go(P_DONE);
-        if (silent && !m_started && !uninstall) Begin();
+        if ((silent || update) && !m_started && !uninstall) Begin();
+        if (update && !silent && m_page == P_DONE) { m_doneT += dt; if (m_doneT > 1.8f) { Finish(); return; } }
         if (silent && m_page == P_DONE) { Finish(); return; }
 
         auto* ctx = m_g.Begin();
@@ -800,6 +821,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int) {
     }
     if (silent) app.Options().launch = false;
     if (!app.Create(inst)) return 1;
+    if (!wantUninstall && cl.find(L"/fresh") == std::wstring::npos) {        // already installed: update in place, no wizard ("/fresh" shows the full wizard again)
+        Opts prev = app.Options();
+        if (DetectInstall(prev)) { app.Options() = prev; app.Options().launch = !silent; app.update = true; }
+    }
     app.Run();
     return 0;
 }

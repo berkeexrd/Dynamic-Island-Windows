@@ -2,6 +2,19 @@
 
 ## [Yayınlanmadı]
 
+### Açılış animasyonları ve kare kare kayıt
+- Açılış animasyonu: ada ekran kenarından iniyor, widget kartları sırayla belirip yükseliyor, duvar kağıdı siyahtan açılıyor ve simgeler sırayla beliriyor (azaltılmış hareket ayarına uyar).
+- `Aether.exe --record <klasör> [--fps 60] [--seconds 19]` sanal saatle çalışıp her kareyi PNG olarak kaydeder (kare kaçırmaz) ve tüm kabuğu otomatik gezer (ada modları, bildirim, Başlat menüsü, masaüstü menüsü, Explorer, Geri Dönüşüm Kutusu, sonda her renk teması); başka programları açan adımlar gerçek zamanlı kaydedilir (frames.ffconcat her karenin süresini tutar); kayıtlar her zaman İngilizcedir ve özgün tema ile duvar kağıdı geri yüklenir. `tools\record_showcase.bat` kaydedip MP4 üretir, `tools\make_video.bat` mevcut kareleri videoya çevirir (ffmpeg gerekir).
+- Release derlemesi artık gerçekten sessiz log seviyesini kullanıyor (`main.cpp`'deki sabit Debug seviyesi bunu eziyordu).
+
+### Adada bildirimler, widget yazı taşması
+- Yeni Windows bildirimleri (mesaj, arama, her uygulama; Telefon Bağlantısı ile bağlı telefon dahil) artık Dynamic Island'da beliriyor; açılışta eskiler tekrar gösterilmez, oyun modu bastırabilir.
+- Widget'lardaki uzun başlıklar (ör. çalan parça kartı) kartın dışına taşmak yerine üç noktayla bitiyor.
+
+### Release'te sessiz log, yeni hava durumu kartı
+- Release sürümü artık gereksiz log tutmuyor: yalnızca uyarı ve hatalar kaydedilir, konsola/hata ayıklayıcıya yazılmaz, log `%LOCALAPPDATA%\Aether\aether.log` içindedir (en fazla 512 KB, `AETHER_LOG=1` ile ayrıntılı log açılır) ve kapalı loglar biçimlendirilmez bile. `imgui.ini` artık yazılmıyor.
+- Masaüstü hava durumu kartı yenilendi: daha büyük sıcaklık, en yüksek/düşük ve hissedilen, nem / rüzgar / UV veya yağış satırı ve sıcaklık eğrisi ile yağış ihtimalli saatlik şerit.
+
 ### Tam kabuk: masaüstü, dosya yöneticisi, oturum yöneticisi, installer
 - **AetherDesktop**: kendi masaüstü (yerleşim modlu duvar kağıdı, karartma, bulanıklık ve slayt gösterisi; gerçek kabuk simgeleri ve küçük resimleri, seçim, çerçeve seçimi, sürükle-bırak, yeniden adlandırma, pano, "Diğer seçenekler" altında Windows bağlam menüsü, otomatik düzen, `Ctrl` + tekerlekle simge boyutu, isteğe bağlı saat). Sürekli yeniden çizim yerine ihtiyaç anında çizim.
 - **Özelleştir** penceresi: ortada, en üstte (widget'ların üstünde), canlı önizleme, üç sekme (duvar kağıdı, simgeler ve renk, masaüstü).
@@ -13,6 +26,11 @@
 - Yeni Aether logosu ve ikon seti.
 - Düzeltildi: görev çubuğundaki "masaüstünü göster" düğmesi Explorer'ın çıplak masaüstünü AetherDesktop'un üstüne çıkarıyordu; oyun modu algılayıcısı masaüstü penceresini artık tam ekran uygulama saymıyor.
 
+- **AetherSetup yerinde güncelliyor**: Aether zaten kuruluysa setup sihirbazı atlar — çalışan Aether'i (çubuk, masaüstü, ada, gezgin, kabuk) kapatır, kullanıcının seçtiği ayarları (klasör, kabuk değişimi, otomatik başlatma, klasör ilişkilendirme, kısayollar, intro) koruyarak üstüne kurar ve Aether'i kendiliğinden yeniden başlatır. `/fresh` ile tam sihirbaz açılır.
+- Düzeltme: "Tüm widget'ları gizle" sonrası (ya da ana anahtar kapalı başlatılınca) widget'lar hiç gelmiyordu; kartlar artık hep oluşturuluyor, anahtarlar sadece gösterip gizliyor, açınca hemen görünür.
+- Düzeltme: duvar kağıdı hizalaması — bulanıklık açıkken ekran kenarlarında 17 px'e kadar boşluk kalıyordu; resim artık piksele oturan, ekranı her zaman kaplayan bir alana çiziliyor ("Yay" modu monitörün kendi dilimini gösterir).
+- Düzeltme: ikinci monitöre taşınan simgeler kayboluyor ve eski yerine dönüyordu; artık bırakılan monitöre yerleşiyor.
+- Düzeltme: AetherExplorer'da `Ctrl+A` her durumda çalışıyor ve metin kutularında metni seçiyor.
 ### Cam görünümü konsepte yaklaştırıldı
 - **Parlama panelin içinden silinir**: gölge ve renkli glow artık gövdenin altında durmuyor; yarı saydam temalar kirli bir renk yerine masaüstünü gösteriyor (`DrawGlassGlow` + `PunchOutPanels`; eski davranış için `AETHER_GLASS_PUNCH_OUT=0`). Düz temalar (Klasik) değişmedi.
 - Her temadan türetilen **ikinci vurgu rengi** (`glass::kAccent2`, tema başına ton kaydırma) iki tonlu parlamayı, 3 duraklı kenarı, halkaları, çubukları ve saati renklendiriyor. Yazı renkleri de temayı izliyor.

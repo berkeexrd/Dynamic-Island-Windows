@@ -32,6 +32,7 @@ public:
     void PushNotification(const NotificationData& notif);
     void TriggerVolumeHUD(float volume);
     void SetGamingSuspended(bool suspended);
+    void PlayIntro();   // start-up: the island drops in from above the screen edge
 
     // True when nothing at all needs a new frame (the main loop can sleep).
     [[nodiscard]] bool IsResting() const;

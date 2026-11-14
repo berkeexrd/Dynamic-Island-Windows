@@ -18,3 +18,10 @@ build_check.bat
 build_log.txt
 backup*/
 _backup*/
+# showcase recordings (frames can be several GB) and release artefacts
+frames/
+_review/
+*.mp4
+dist/
+# Dear ImGui is downloaded by CMake (or copied here by hand)
+third_party/imgui/

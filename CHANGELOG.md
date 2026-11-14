@@ -5,6 +5,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), versions follow
 
 ## [Unreleased]
 
+### Start-up animations and frame-by-frame recording
+- Start-up reveal: the island drops in from the screen edge, widget cards fade and rise one after another, the desktop wallpaper fades in from black and icons appear in sequence (respects reduced motion).
+- `Aether.exe --record <folder> [--fps 60] [--seconds 19]` renders on a virtual clock and saves every frame as PNG (frame-locked, no dropped frames), with a scripted tour of the whole shell (island states, notification, Start menu, desktop menu, Explorer, Recycle Bin, then every colour theme); steps that open other programs are timed in real time (frames.ffconcat keeps each frame's duration); recordings are always in English and the original theme and wallpaper are restored. `tools\record_showcase.bat` records and builds an MP4, `tools\make_video.bat` converts existing frames (needs ffmpeg).
+- Release builds really use the quiet log level now (a hard-coded Debug level in `main.cpp` overrode it).
+
+### Island notifications, widget text overflow
+- New Windows toasts (messages, calls, any app, including a phone linked through Phone Link) now pop out of the Dynamic Island; nothing is replayed at startup and gaming mode can suppress them.
+- Long titles in widgets (e.g. the now-playing card) end in an ellipsis instead of overflowing the card.
+
+### Quieter release builds, new weather card
+- Release builds no longer spam logs: only warnings and errors are kept, nothing is printed to the console or debugger, the log lives in `%LOCALAPPDATA%\Aether\aether.log` (capped at 512 KB, `AETHER_LOG=1` re-enables verbose logging) and log messages are not even formatted when disabled. `imgui.ini` is no longer written.
+- Redesigned desktop weather card: bigger temperature, hi/lo and feels-like, humidity / wind / UV-or-rain row and an hourly strip with temperature curve and rain chance.
+
 ### Complete shell: desktop, file manager, session manager, installer
 - **AetherDesktop**: own desktop (wallpaper with fit modes, dim, blur and slideshow; icons with real shell icons and thumbnails, selection, marquee, drag & drop, rename, clipboard, Windows context menu behind "More options", auto arrange, `Ctrl` + wheel icon size, optional clock). On-demand rendering instead of continuous redraws.
 - **Customise** window: centred, top-most (above desktop widgets), live preview, three tabs (wallpaper, icons and colour, desktop).
@@ -14,6 +27,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), versions follow
 - **AetherSetup**: single-file installer and uninstaller with a modern UI, component and shell-replacement options (this user or all users), silent mode (`/S`), embedded payload built by CMake.
 - Desktop widgets: right-click menu to hide one or all widgets.
 - New Aether logo and icon set.
+- **AetherSetup updates in place**: when Aether is already installed, running the setup skips the wizard — it closes the running Aether (bar, desktop, island, explorer, shell), reinstalls over it keeping the options the user chose (install folder, shell replacement, auto start, folder association, shortcuts, intro) and starts Aether again by itself. `/fresh` shows the full wizard instead.
+- Fixed: desktop widgets never appeared after "Hide all widgets" (or with the master switch off at start-up): the cards are now always created and only shown/hidden by the switches, so turning them on works immediately.
+- Fixed: wallpaper alignment — the blur bake rounded down and left a gap of up to 17 px at the screen edges; the picture is now drawn on a pixel-snapped rectangle that always covers the screen (and "Span" shows the monitor's slice of the virtual desktop).
+- Fixed: icons carried to the second monitor disappeared and snapped back when the cursor crossed over a widget, the bar or the drag image (the OLE-drag fallback treated it as a no-op move into the same folder) — it is now placed on the monitor under the drop point.
+- Fixed: `Ctrl+A` in AetherExplorer now always works (also right after dialogs/menus, regained keyboard focus on activation) and selects the text in the path / search / rename boxes.
 - Fixed: the taskbar "show desktop" button raised Explorer's bare desktop over AetherDesktop; the game-mode detector no longer treats the desktop window as a full-screen app.
 
 ### Glass look matched to the concept

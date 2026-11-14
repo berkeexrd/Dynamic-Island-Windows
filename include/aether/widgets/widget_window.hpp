@@ -31,6 +31,7 @@ public:
     void Show(bool show = true);
     void Update(float dt);
     void Render();
+    [[nodiscard]] bool IsAnimating() const { return m_shownNow && m_appear < 1.0f; }   // entrance animation running
 
     [[nodiscard]] HWND GetHwnd() const { return m_hwnd; }
     [[nodiscard]] WidgetType GetType() const { return m_type; }
@@ -47,6 +48,7 @@ private:
     void RenderNowPlaying(ID2D1DeviceContext* ctx);
     void UpdateArt();
     bool m_shownNow{true};
+    float m_appear{1.0f}, m_delay{0.0f};   // entrance animation (0..1) and its stagger delay in seconds
     float m_time{0};
     ComPtr<ID2D1Bitmap1> m_art; uint64_t m_artVersion{~0ull};
     struct Drive { wchar_t letter; std::wstring label; double usedGB, totalGB; };
@@ -77,6 +79,7 @@ private:
     ComPtr<IDWriteTextFormat> m_fontClock;     // big, thin clock digits (card-less clock)
     ComPtr<IDWriteTextFormat> m_fontDate;      // date line above the clock (centred)
     ComPtr<IDWriteTextFormat> m_fontInfo;      // weather line below the clock (left aligned, measured)
+    ComPtr<IDWriteTextFormat> m_fontTinyL;     // left aligned small text (weather)
     ComPtr<IDWriteTextFormat> m_fontTinyR;     // right aligned small text (storage usage)
     ComPtr<ID2D1SolidColorBrush> m_brush;
     bool m_hasIconFont{false};
@@ -98,12 +101,15 @@ public:
     void Update(float dt);
     void Render();
     void SetVisible(bool visible);
+    void SetFrameByFrame(bool on) { m_frameByFrame = on; }   // recording: render on every call
+    [[nodiscard]] bool IsAnimating() const { for (const auto& w : m_widgets) if (w->IsAnimating()) return true; return false; }
 
 private:
     WidgetManager() = default;
 
     std::vector<std::unique_ptr<DesktopWidgetWindow>> m_widgets;
     bool m_visible{true};
+    bool m_frameByFrame{false};
 };
 
 } // namespace aether::widgets

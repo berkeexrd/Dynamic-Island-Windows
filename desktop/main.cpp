@@ -252,6 +252,7 @@ private:
     Wall m_wall, m_wallPrev; float m_wallFade{1.0f}; std::wstring m_wallKey;
     Color m_bgColor{0.05f, 0.03f, 0.10f, 1.0f};
     bool m_tracking{false};
+    ULONGLONG m_born{GetTickCount64()}; int m_iconSeq{0}; bool m_firstWall{true};   // start-up reveal
     std::unordered_map<std::wstring, ULONGLONG> m_iconT;            // arrival time of an icon (fade-in)
     int m_lastMin{-1};
     std::vector<HWND> m_hidden; bool m_showDesk{false}; int m_cfgVer{0};
@@ -851,7 +852,7 @@ void Desktop::Tick() {
     }
     if (!m_iconT.empty()) {           // icon fade-in
         const ULONGLONG t = GetTickCount64();
-        for (auto it = m_iconT.begin(); it != m_iconT.end();) { if (t - it->second >= 200) it = m_iconT.erase(it); else { anim = true; ++it; } }
+        for (auto it = m_iconT.begin(); it != m_iconT.end();) { if (t >= it->second + 200) it = m_iconT.erase(it); else { anim = true; ++it; } }
     }
     m_animating = anim;
 }
@@ -1065,23 +1066,33 @@ bool Desktop::BakeWall(const std::wstring& path, int style, Wall& out) {
     if (!iw || !ih) return false;
     const float s = Scale();
     const double sw = m_W * s, sh = m_H * s;
+    // "Span" (22) stretches one picture over every monitor: this window shows its own slice of the virtual desktop
+    double vw = sw, vh = sh, offx = 0, offy = 0;
+    if (style == 22) {
+        vw = GetSystemMetrics(SM_CXVIRTUALSCREEN); vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        MONITORINFO mi = {sizeof(mi)};
+        if (GetMonitorInfoW(m_monitor ? m_monitor : MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
+            offx = mi.rcMonitor.left - GetSystemMetrics(SM_XVIRTUALSCREEN); offy = mi.rcMonitor.top - GetSystemMetrics(SM_YVIRTUALSCREEN);
+        }
+        if (vw < sw || vh < sh) { vw = sw; vh = sh; offx = offy = 0; }
+    }
     double tw = iw, th = ih;
     switch (style) {
         case 2: tw = sw; th = sh; break;                                                           // stretch
         case 6: { const double k = std::min(sw / iw, sh / ih); tw = iw * k; th = ih * k; break; }     // fit
         case 0: case 100: break;                                                                  // center / tile: 1:1
-        default: { const double k = std::max(sw / iw, sh / ih); tw = iw * k; th = ih * k; break; }    // fill / span
+        default: { const double k = std::max(vw / iw, vh / ih); tw = iw * k; th = ih * k; break; }    // fill / span
     }
     const bool tile = style == 100;
     static const int kDiv[4] = {1, 5, 10, 18};                    // blur = bake small, draw stretched with linear filtering
     const int div = tile ? 1 : kDiv[std::clamp(m_blur, 0, 3)];
-    double bw = tw / div + 0.5, bh = th / div + 0.5;
+    double bw = std::ceil(tw / div), bh = std::ceil(th / div);    // round UP: a rounded-down bake left a gap of up to div-1 px at the screen edges
     if (bw > 8192.0 || bh > 8192.0) {                             // GPU-safe cap, both axes together so the aspect never skews
         const double c = 8192.0 / std::max(bw, bh);
         bw = std::floor(bw * c); bh = std::floor(bh * c);
     }
-    const UINT BW = std::clamp<UINT>(static_cast<UINT>(std::max(1.0, std::floor(bw))), 1u, 8192u);
-    const UINT BH = std::clamp<UINT>(static_cast<UINT>(std::max(1.0, std::floor(bh))), 1u, 8192u);
+    const UINT BW = std::clamp<UINT>(static_cast<UINT>(std::max(1.0, bw)), 1u, 8192u);
+    const UINT BH = std::clamp<UINT>(static_cast<UINT>(std::max(1.0, bh)), 1u, 8192u);
     ComPtr<IWICBitmapSource> src = oriented;
     if (BW != iw || BH != ih) {
         ComPtr<IWICBitmapScaler> sc;
@@ -1090,10 +1101,11 @@ bool Desktop::BakeWall(const std::wstring& path, int style, Wall& out) {
     ComPtr<ID2D1Bitmap1> bmp;
     if (FAILED(m_dcomp->GetContext()->CreateBitmapFromWicBitmap(src.Get(), nullptr, &bmp)) || !bmp) return false;
     out.bmp = bmp; out.tile = tile;
-    // destination from the bitmap that was actually baked: pixels and drawn rectangle can never disagree in aspect
-    const D2D1_SIZE_U px = bmp->GetPixelSize();
-    const float dw = px.width * div / s, dh = px.height * div / s;
-    out.dst = Rect{(m_W - dw) / 2, (m_H - dh) / 2, dw, dh};
+    // destination: the intended size (the whole picture always maps onto it, whatever the bake size), snapped outwards to whole
+    // device pixels so no half-covered edge row/column shows the background colour or smears the picture
+    const double x0 = std::floor((vw - tw) * 0.5 - offx), x1 = std::ceil((vw + tw) * 0.5 - offx);
+    const double y0 = std::floor((vh - th) * 0.5 - offy), y1 = std::ceil((vh + th) * 0.5 - offy);
+    out.dst = Rect{static_cast<float>(x0 / s), static_cast<float>(y0 / s), static_cast<float>((x1 - x0) / s), static_cast<float>((y1 - y0) / s)};
     return true;
 }
 
@@ -1125,6 +1137,8 @@ void Desktop::LoadWallpaper(bool force) {
     Wall nw;
     const bool ok = !path.empty() && BakeWall(path, style, nw);
     if (m_wall.bmp) { m_wallPrev = m_wall; m_wallFade = 0.0f; }
+    else if (ok && m_firstWall) m_wallFade = 0.0f;       // first wallpaper fades in from black
+    if (ok) m_firstWall = false;
     m_wall = ok ? nw : Wall{};
     Kick();
 }
@@ -1334,7 +1348,7 @@ void Desktop::OnIcon(IconRes* r) {
     ComPtr<ID2D1Bitmap1> bmp;
     if (SUCCEEDED(m_dcomp->GetContext()->CreateBitmap(D2D1::SizeU(res->w, res->h), res->px.data(), res->w * 4,
                   D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_NONE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)), &bmp)))
-        { m_icons[res->key] = bmp; m_iconT[res->key] = GetTickCount64(); }
+        { m_icons[res->key] = bmp; const ULONGLONG nt = GetTickCount64(); m_iconT[res->key] = nt + (nt - m_born < 4000 ? static_cast<ULONGLONG>(std::min(m_iconSeq++ * 55, 800)) + 250 : 0); }   // icons appear one after another at start-up
     else m_iconFailed.insert(res->key);
     Kick();
 }
@@ -1489,7 +1503,7 @@ void Desktop::DrawIcon(const Item& it, const Rect& r, float alpha) {
     auto f = m_icons.find(it.key);
     {
         auto ft = m_iconT.find(it.key);
-        if (ft != m_iconT.end()) alpha *= std::min(1.0f, static_cast<float>(GetTickCount64() - ft->second) / 180.0f);
+        if (ft != m_iconT.end()) alpha *= std::clamp(static_cast<float>(static_cast<long long>(GetTickCount64()) - static_cast<long long>(ft->second)) / 180.0f, 0.0f, 1.0f);
     }
     if (f != m_icons.end() && f->second) {
         const D2D1_SIZE_U px = f->second->GetPixelSize();
@@ -2469,6 +2483,41 @@ void Desktop::DropAt(IDataObject* obj, POINT sp, DWORD keys, DWORD* effect) {
     if (toBin) { su::RunFileOp(m_hwnd, kMsgOpDone, su::Op::Delete, paths, L"", L"", L""); *effect = DROPEFFECT_MOVE; return; }
     if (dest.empty()) { *effect = DROPEFFECT_NONE; return; }
     auto norm = [](std::wstring p) { while (p.size() > 3 && p.back() == L'\\') p.pop_back(); return p; };
+    // Our own icons arriving through a real OLE drag (the cursor was over a widget, the bar or the drag image when it crossed
+    // to the other screen, so the cross-monitor handoff did not take it). Treat it as a carry: put them on this monitor at the
+    // drop cell instead of failing as a no-op "move into the same folder" — which made them vanish and snap back.
+    if (m_dropHover < 0 && IEquals(norm(dest), norm(m_desktopDir))) {
+        bool fromSibling = false;
+        for (Desktop* d : Siblings()) if (d && d != this && d->m_oleDrag) { fromSibling = true; break; }
+        bool ours = !paths.empty();
+        for (const auto& pth : paths) {
+            const std::wstring par = norm(aether::explorer::ParentOf(pth));
+            if (!IEquals(par, norm(m_desktopDir)) && !(!m_publicDir.empty() && IEquals(par, norm(m_publicDir)))) { ours = false; break; }
+        }
+        if (fromSibling && ours) {
+            const auto z = Z();
+            const float s = Scale();
+            POINT cp = sp; ScreenToClient(m_hwnd, &cp);
+            int c = std::clamp(static_cast<int>(std::lround(((cp.x / s) - (m_work.x + 8)) / z.cw)), 0, std::max(0, m_cols - 1));
+            int r = std::clamp(static_cast<int>(std::lround(((cp.y / s) - (m_work.y + 8)) / z.ch)), 0, std::max(0, m_rows - 1));
+            std::set<long long> taken;
+            auto cellOf = [](int cc, int rr) { return (static_cast<long long>(cc) << 32) | static_cast<unsigned>(rr); };
+            for (const auto& it : m_items) if (it.col >= 0) taken.insert(cellOf(it.col, it.row));
+            for (Desktop* d : Siblings()) if (d) d->m_auto = false;
+            for (const auto& pth : paths) {
+                for (int guard = 0; guard < m_cols * m_rows && taken.count(cellOf(c, r)); ++guard)
+                    if (++r >= m_rows) { r = 0; if (++c >= m_cols) c = 0; }
+                taken.insert(cellOf(c, r));
+                const Pos3 q{m_mon, c, r};
+                for (Desktop* d : Siblings()) if (d) d->m_pos[Lower(pth)] = q;
+                if (++r >= m_rows) { r = 0; if (++c >= m_cols) c = std::max(0, m_cols - 1); }
+            }
+            for (Desktop* d : Siblings()) if (d) d->LoadItems();
+            SaveCfg();
+            *effect = DROPEFFECT_NONE;                   // nothing moved on disk: the files stay where they are
+            return;
+        }
+    }
     if (eff & DROPEFFECT_MOVE) {
         bool same = true;
         for (const auto& p : paths) if (!IEquals(norm(aether::explorer::ParentOf(p)), norm(dest))) { same = false; break; }

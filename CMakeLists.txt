@@ -23,9 +23,9 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_tables.cpp ${IMGUI_DIR}/imgui_widgets.cpp
     ${IMGUI_DIR}/backends/imgui_impl_win32.cpp ${IMGUI_DIR}/backends/imgui_impl_dx11.cpp)
 
-add_executable(Aether WIN32 ${AETHER_SOURCES} bar/weather.cpp ${IMGUI_SOURCES} assets/icons/aether.rc)
+add_executable(Aether WIN32 ${AETHER_SOURCES} bar/weather.cpp bar/notifications.cpp ${IMGUI_SOURCES} assets/icons/aether.rc)
 target_include_directories(Aether PRIVATE include third_party/stb third_party/json ${IMGUI_DIR})
-target_link_libraries(Aether PRIVATE d3d11 dxgi d2d1 dwrite dcomp dwmapi shcore winmm ole32 oleaut32 windowsapp runtimeobject pdh winhttp shlwapi)
+target_link_libraries(Aether PRIVATE d3d11 dxgi d2d1 dwrite dcomp dwmapi shcore winmm ole32 oleaut32 windowsapp runtimeobject pdh winhttp shlwapi shell32 uuid windowscodecs)
 if(MSVC)
     target_compile_options(Aether PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/utf-8;/permissive-;/EHsc>")
 endif()

@@ -570,6 +570,8 @@ private:
     enum { E_None = 0, E_Search, E_Path, E_Rename };
     int m_edit{E_None};
     std::wstring m_editText, m_search;
+    bool m_editAll{false};                       // Ctrl+A / fresh edit: the whole text is selected, the next key replaces it
+    float EditW(float size);
     int m_renameIndex{-1};
 
     // icon cache
@@ -910,6 +912,8 @@ LRESULT Explorer::Handle(UINT m, WPARAM w, LPARAM l) {
         }
         return 0;
     case WM_SETFOCUS: case WM_KILLFOCUS: Kick(); return 0;
+    case WM_MOUSEACTIVATE: SetFocus(m_hwnd); return MA_ACTIVATE;
+    case WM_ACTIVATE: if (LOWORD(w) != WA_INACTIVE) SetFocus(m_hwnd); return 0;
     case WM_DESTROY: SaveCfg(); StopWatch(); RevokeDragDrop(m_hwnd); PostQuitMessage(0); return 0;
     }
     return DefWindowProcW(m_hwnd, m, w, l);
@@ -1559,8 +1563,16 @@ void Explorer::ShowProperties() {
 }
 
 // ---- editing ------------------------------------------------------------------------------------------------------
+float Explorer::EditW(float size) {
+    ComPtr<IDWriteTextLayout> lay; float w = 0;
+    if (!m_editText.empty() && SUCCEEDED(m_dcomp->GetDWriteFactory()->CreateTextLayout(m_editText.c_str(), static_cast<UINT32>(m_editText.size()), Fmt(size, 400, 0, false), 4000, 30, &lay)) && lay) {
+        DWRITE_TEXT_METRICS tm{}; lay->GetMetrics(&tm); w = tm.widthIncludingTrailingWhitespace;
+    }
+    return w;
+}
+
 void Explorer::BeginEdit(int target, const std::wstring& text) {
-    m_edit = target; m_editText = text;
+    m_edit = target; m_editText = text; m_editAll = target != E_Search && !text.empty();
     SetTimer(m_hwnd, kTimerCaret, 500, nullptr);
     Kick();
 }
@@ -1611,6 +1623,7 @@ void Explorer::CommitEdit() {
 
 void Explorer::OnChar(wchar_t c) {
     if (m_edit != E_None) {
+        if (m_editAll && (c == 8 || (c >= 32 && c != 127))) { m_editText.clear(); m_editAll = false; if (c == 8) { if (m_edit == E_Search) { m_search.clear(); RebuildView(); } Kick(); return; } }
         if (c == 8) { if (!m_editText.empty()) m_editText.pop_back(); }
         else if (c == 13) { CommitEdit(); return; }
         else if (c == 27) { CancelEdit(); return; }
@@ -1635,10 +1648,17 @@ void Explorer::OnChar(wchar_t c) {
 
 void Explorer::OnKey(WPARAM vk) {
     const bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0, shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0, alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+    if (ctrl && !alt && vk == 'A' && !m_about) {                          // Ctrl+A: select all — in an edit box the text, otherwise every entry
+        if (m_edit != E_None) { m_editAll = !m_editText.empty(); Kick(); return; }
+        if (!m_home) { std::fill(m_sel.begin(), m_sel.end(), 1); if (m_cursor < 0 && !m_view.empty()) m_cursor = 0; Kick(); }
+        return;
+    }
     if (vk == VK_F1) { m_about = !m_about; Kick(); return; }
     if (m_about) { if (vk == VK_ESCAPE || vk == VK_RETURN) m_about = false; Kick(); return; }
     if (m_edit != E_None) {
         if (vk == VK_ESCAPE) CancelEdit();
+        else if (vk == VK_DELETE && m_editAll) { m_editText.clear(); m_editAll = false; if (m_edit == E_Search) { m_search.clear(); RebuildView(); } Kick(); }
+        else if (vk == VK_LEFT || vk == VK_RIGHT || vk == VK_HOME || vk == VK_END) { m_editAll = false; Kick(); }
         return;      // text goes through WM_CHAR
     }
     if (alt && vk == VK_LEFT) { GoBack(); return; }
@@ -2991,6 +3011,7 @@ void Explorer::DrawToolbar(float W) {
         Glyph(bui::kGlyphChevronRight, Rect{r.x + 12, r.y, 20, h}, 11.0f, text);
         const float tx = r.x + 40, tw = r.width - 90;
         if (m_edit == E_Path) {
+            if (m_editAll && !m_editText.empty()) FillRR(Rect{tx - 2, r.y + 8, std::min(EditW(13.0f) + 4, tw), h - 16}, 4, WithA(vl, 0.4f));
             Txt(m_editText, Rect{tx, r.y, tw, h}, 13.0f, 400, text);
             if ((GetTickCount64() / 500) % 2 == 0) {
                 ComPtr<IDWriteTextLayout> lay; float w = 0;
@@ -3559,6 +3580,7 @@ void Explorer::DrawFolder(float W, float H) {
             if (m_edit == E_Rename && m_renameIndex == i) {
                 const Rect er{r.x + 2, ic.Bottom() + 6, r.width - 4, 24};
                 FillRR(er, 8, Color{0, 0, 0, 0.5f}); StrokeRR(er, 8, vl, 1.5f);
+                if (m_editAll && !m_editText.empty()) FillRR(Rect{er.x + 4, er.y + 4, std::min(EditW(12.0f) + 4, er.width - 8), er.height - 8}, 3, WithA(vl, 0.45f));
                 Txt(m_editText, Rect{er.x + 6, er.y, er.width - 12, er.height}, 12, 400, kWhite);
             } else TxtWrap(e.name, Rect{r.x + 4, ic.Bottom() + 6, r.width - 8, 36}, 12, sel ? 600 : 400, sel ? kWhite : text);
         } else {
@@ -3566,6 +3588,7 @@ void Explorer::DrawFolder(float W, float H) {
             if (m_edit == E_Rename && m_renameIndex == i) {
                 const Rect er{r.x + 52, r.y + 3, nameW - 52, r.height - 6};
                 FillRR(er, 8, Color{0, 0, 0, 0.45f}); StrokeRR(er, 8, vl, 1.5f);
+                if (m_editAll && !m_editText.empty()) FillRR(Rect{er.x + 6, er.y + 4, std::min(EditW(13.5f) + 4, er.width - 12), er.height - 8}, 3, WithA(vl, 0.45f));
                 Txt(m_editText, Rect{er.x + 8, er.y, er.width - 16, er.height}, 13.5f, 400, kWhite);
                 if ((GetTickCount64() / 500) % 2 == 0) {
                     ComPtr<IDWriteTextLayout> lay; float tw = 0;

@@ -420,6 +420,15 @@ void IslandWindow::SetGamingSuspended(bool suspended) {
     }
 }
 
+void IslandWindow::PlayIntro() {
+    if (config::ConfigManager::Instance().Get().animation.reducedMotion) return;
+    const float w = 124.0f * m_dpiScale, h = 34.0f * m_dpiScale;
+    m_boundsSpring.SnapTo(Rect{m_windowWidth * 0.5f - w * 0.5f, -48.0f * m_dpiScale, w, h});
+    m_contentAlpha.SnapTo(0.0f);
+    UpdateTargetBounds();
+    m_contentAlpha.SetTarget(1.0f);
+}
+
 void IslandWindow::SetMode(IslandMode mode) {
     if (m_currentMode == mode) return;
     m_currentMode = mode;

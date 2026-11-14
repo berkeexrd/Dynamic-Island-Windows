@@ -141,7 +141,7 @@ bool SettingsWindow::Create() {
     // Initialize ImGui
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
+    ImGuiIO& io = ImGui::GetIO(); io.IniFilename = nullptr; io.LogFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     {   // Segoe UI (+ Semibold for headings, Fluent Icons for the sidebar) with Latin Extended so Turkish letters render properly
