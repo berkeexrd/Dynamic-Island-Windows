@@ -5,6 +5,10 @@
 
 namespace aether::ui {
 
+// Interface scale (system DPI / 96); the settings window multiplies every pixel size by it.
+inline float Scale = 1.0f;
+inline float Sc(float v) { return v * Scale; }
+
 // Master Rules v4: Spacing tokens
 namespace Spacing {
     constexpr float XS = 4.0f;
@@ -83,11 +87,20 @@ public:
 
     void Apply();
     void SetAccentColor(uint32_t hexRgba);
+    void UseGlassTheme(int index);   // switches the shared glass theme and re-tints the whole settings UI
+    [[nodiscard]] int ThemeIndex() const { return m_themeIndex; }
     [[nodiscard]] const ThemeColors& Colors() const { return m_colors; }
 
 private:
     Theme();
     ThemeColors m_colors;
+    int m_themeIndex{0};
 };
+
+// Fonts loaded by the settings window (null = ImGui default)
+inline ImFont* FontBold = nullptr;
+inline ImFont* FontIcons = nullptr;   // Segoe Fluent Icons (Windows 11), nullptr when missing
+inline ImFont* FontTitle = nullptr;
+inline ImFont* FontSmall = nullptr;
 
 } // namespace aether::ui

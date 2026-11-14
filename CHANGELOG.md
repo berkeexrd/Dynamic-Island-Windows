@@ -3,6 +3,57 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/), versions follow [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Network centre, widgets, themes
+- New network panel: Wi-Fi switch, animated current connection, scanned network list, connect with password (WPA2/WPA3/open), disconnect, network and airplane-mode shortcuts.
+- Desktop widgets: Storage, Weather and Now playing (with transport buttons). The per-widget switches in Settings now really show / hide them.
+- Themes: Classic and Lavender (softer purple glass).
+- Tray icons are rendered at their native size and scaled with a high-quality filter (sharper).
+- Notification panel buttons aligned.
+
+### Notifications, weather, Start menu, languages
+- New own notification centre (real toasts from the Windows notification database, dismiss / clear all, animated empty state, unread badge on the bell).
+- New animated weather panel: sky scene (sun, moon, stars, clouds, rain, snow, fog, lightning), details, 12-hour strip, 7-day forecast (Open-Meteo).
+- Start menu and panels close on an outside click; clicks in the glow margin pass through to the dock and apps.
+- Show-desktop is now a thin edge sliver; quick-settings Desktop tile became Airplane mode.
+- Dates, weekdays and months follow the Windows language; UI text is English/Turkish (others fall back to English).
+- Settings: removed the Taskbar page.
+
+### Quick settings, themes, settings window
+- Quick settings: choose the sound output and input device (new device list), microphone volume and mute, a working network status (uses Windows' own connectivity verdict), tile for Show desktop.
+- Bar: show-desktop button and a notifications button (opens the Windows notification centre).
+- Island: play / pause / next / previous run on their own thread with a media-key fallback, so the transport buttons work with every player.
+- Themes: Violet, OLED Black, Clear Glass, Ocean, Emerald, Rose, Sunset. Chosen in Settings > Appearance, shared by every Aether process through %APPDATA%\Aether\theme.txt.
+- Settings window redesigned: sidebar with groups, cards, Segoe UI font with Turkish letters, theme picker, translated (English / Turkish).
+
+### Changed - new violet design (matches the mockup)
+- **Start menu rewritten**: left rail (avatar, user name, Start / All apps / Documents / Downloads / Music / Pictures / Videos, Settings, Power),
+  pill search box with a "stay open" pin, 6x2 pinned-app grid, "Recommended" list built from the Recent folder ("23 minutes ago", "Yesterday at 21:14").
+  Search covers apps, settings, files in your user folders and a web fallback; keyboard navigation, paste, context menus.
+- **Aether Bar**: purple Start button, weather pill (bottom left, Open-Meteo + IP location), tray pill with chevron / volume / network / clock+date / bell.
+- **Desktop widgets**: ring-gauge System Performance (CPU / RAM / real GPU load), Network Activity with download + upload sparklines, clock card with calendar tile.
+  New default position: stacked on the right edge of the primary monitor.
+- Default accent colours are violet (`0xFF8B5CF6` / `0xFF5B3DF5`).
+- UI text follows the Windows display language (English / Turkish); override with `--lang=en|tr`.
+
+### Added
+- **Glass rework**: the frosted look is now drawn (near-opaque dark violet body, inner light blooms, gradient rim, real Gaussian violet glow via `render/glass.hpp`) instead of the Windows blur, which showed rectangular blurred boxes. Used by the Start menu, bar pills, flyouts and widgets. Widgets resized to the mockup (264 px wide, rings with value inside, compact network row, calendar glyph) and stacked performance / network / clock on the right edge; widget positions use new config keys, so older saved positions are reset once.
+- `WeatherService` (needs internet), GPU utilisation through PDH "GPU Engine" counters, upload history in `MetricsCollector`.
+- New link libraries: `winhttp secur32 windowscodecs shlwapi` (AetherBar), `pdh` (Aether).
+
+### Added - Aether Bar
+- **Own system tray**: `TrayHost` receives the `Shell_NotifyIcon` protocol, so every app's tray icon appears in Aether's tray panel
+  (chevron button; left / right / double click are forwarded to the owning app).
+- **Own flyouts**: quick settings (volume, network, battery, shortcuts) on the volume/battery area and a calendar on the clock.
+  They replace the Win+A / Win+N / Win+B windows.
+- Modern procedural cursors in the bar, Start menu and flyouts.
+
+### Changed
+- The stock taskbar is now hidden completely by default and kept hidden (checked ~10x per second). `--keep-stock` restores the old auto-hide behaviour
+  (`--hide-stock` is no longer needed).
+- `AetherBar.exe` now requests administrator rights (UAC manifest) so it can reach elevated apps.
+
 ## [1.3.0] - 2026-11-13
 
 ### Fixed
@@ -90,3 +141,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), versions follow
 
 ## [1.0.0]
 - Initial release: Dynamic Island, widgets, taskbar styling, settings center.
+
+## Context menus & settings redesign
+- New modern animated context menu (island, bar, Start) replacing native Win32 menus.
+- Fixed island play/pause/seek button not responding (mouse-release ordering).
+- Settings window redesigned: frameless, rounded, floating sidebar with icons, header panel.
+- Classic theme reworked to the flat Windows 11 look; Lavender theme added.
+
+## First run, wallpapers, notification icons
+- Notification cards show the real app icon and name; empty-state / Wi-Fi messages centred.
+- First-run welcome page (language, theme, start with Windows, wallpaper); Classic is the default theme.
+- Theme-matched wallpapers (purple artwork for Violet/Rose/Lavender, black metallic for the rest) with restore option.
+- Start with Windows now really works (Run entry + elevated logon task for the bar); language setting shared by all processes.

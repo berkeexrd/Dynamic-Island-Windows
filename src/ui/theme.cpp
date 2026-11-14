@@ -1,4 +1,5 @@
 #include "aether/ui/theme.hpp"
+#include "aether/render/glass.hpp"
 #include <algorithm>
 
 namespace aether::ui {
@@ -29,6 +30,29 @@ void Theme::SetAccentColor(uint32_t hexRgba) {
     Apply();
 }
 
+void Theme::UseGlassTheme(int index) {
+    render::glass::SetTheme(index);
+    m_themeIndex = render::glass::ThemeIndex();
+    const auto& t = render::glass::CurrentTheme();
+    const float br = t.bodyBot.r, bg = t.bodyBot.g, bb = t.bodyBot.b;
+    const float ar = t.accent.r, ag = t.accent.g, ab = t.accent.b;
+    auto lift = [&](float add, float accMix, float alpha = 1.0f) {
+        return ImVec4(std::min(br + add + ar * accMix, 1.0f), std::min(bg + add + ag * accMix, 1.0f), std::min(bb + add + ab * accMix, 1.0f), alpha);
+    };
+    const bool oled = index == 1;
+    m_colors.Background = ImVec4(br * 0.75f, bg * 0.75f, bb * 0.75f, 1.0f);
+    m_colors.Shell = oled ? ImVec4(0.02f, 0.02f, 0.025f, 1) : lift(0.012f, 0.0f);
+    m_colors.Surface = lift(oled ? 0.045f : 0.030f, 0.004f);
+    m_colors.SurfaceElevated = lift(oled ? 0.060f : 0.050f, 0.008f);
+    m_colors.SurfaceHover = lift(0.090f, 0.016f);
+    m_colors.SurfaceActive = lift(0.120f, 0.024f);
+    m_colors.SurfaceOverlay = lift(0.060f, 0.010f, 0.97f);
+    m_colors.Border = lift(0.110f, 0.020f);
+    m_colors.BorderSubtle = lift(0.075f, 0.012f);
+    m_colors.BorderHover = lift(0.200f, 0.040f);
+    SetAccentColor(0xFF000000u | (static_cast<uint32_t>(ar * 255.0f + 0.5f) << 16) | (static_cast<uint32_t>(ag * 255.0f + 0.5f) << 8) | static_cast<uint32_t>(ab * 255.0f + 0.5f));
+}
+
 void Theme::Apply() {
     ImGuiStyle& style = ImGui::GetStyle();
 
@@ -45,8 +69,8 @@ void Theme::Apply() {
 
     // Radius hierarchy: Window > Popup/Card > Control > Badge
     style.WindowRounding    = Radius::LG;
-    style.ChildRounding     = Radius::MD;
-    style.FrameRounding     = Radius::SM;
+    style.ChildRounding     = 14.0f;
+    style.FrameRounding     = 8.0f;
     style.PopupRounding     = Radius::MD;
     style.ScrollbarRounding = Radius::SM;
     style.GrabRounding      = Radius::XS;
@@ -100,6 +124,7 @@ void Theme::Apply() {
     colors[ImGuiCol_TabUnfocused]          = m_colors.SurfaceElevated;
     colors[ImGuiCol_TabUnfocusedActive]    = m_colors.SurfaceActive;
     colors[ImGuiCol_ModalWindowDimBg]      = m_colors.BackdropDim;
+    style.ScaleAllSizes(Scale);
 }
 
 } // namespace aether::ui

@@ -33,6 +33,8 @@ struct SystemMetrics {
     std::vector<float> cpuHistory;
     std::vector<float> ramHistory;
     std::vector<float> netDownHistory;
+    std::vector<float> netUpHistory;
+    std::vector<float> gpuHistory;
 };
 
 class MetricsCollector {
@@ -59,6 +61,8 @@ private:
     void QueryBattery();
     void QueryUptime();
     void QueryGpu();
+    void QueryGpuLoad();
+    void ShutdownPdh();
 
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_paused{false};
@@ -77,6 +81,11 @@ private:
     uint64_t m_prevInOctets{0};
     uint64_t m_prevOutOctets{0};
     uint64_t m_prevNetworkSampleTick{0};
+
+    // GPU load via PDH ("GPU Engine" counters)
+    void* m_pdhQuery{nullptr};
+    void* m_pdhCounter{nullptr};
+    bool m_pdhTried{false};
 };
 
 } // namespace aether::system

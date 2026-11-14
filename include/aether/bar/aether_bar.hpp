@@ -14,11 +14,11 @@ namespace aether::bar {
 
 using Microsoft::WRL::ComPtr;
 class StartMenu;
+class Flyout;
 
 // Hides / restores the stock Windows taskbar. Always restorable, even after a crash (--restore).
-//  soft (default): the stock bar is switched to auto-hide. It still exists, so sliding the mouse to the
-//                  bottom edge (or pressing Win+B) brings up the real system tray and quick settings.
-//  hard (--hide-stock): the stock bar window is hidden completely.
+//  hard (default): the stock bar window is hidden completely; Aether's own tray (TrayHost) replaces it.
+//  soft (--keep-stock): the stock bar is only switched to auto-hide, so Win+B still reaches the real tray.
 class ShellTaskbarGuard {
 public:
     static ShellTaskbarGuard& Instance() { static ShellTaskbarGuard g; return g; }
@@ -60,13 +60,17 @@ public:
     [[nodiscard]] HMONITOR Monitor() const { return m_mon; }
     [[nodiscard]] int ReservedPx() const { return m_reservedPx; }
     [[nodiscard]] HWND Hwnd() const { return m_hwnd; }
+    // Panels opened by the chevron (tray), the volume/battery area (quick settings) and the clock (calendar).
+    void SetPanels(Flyout* quick, Flyout* calendar, Flyout* tray) { m_quick = quick; m_calendar = calendar; m_tray = tray; }
+    void SetExtraPanels(Flyout* notify, Flyout* weather, Flyout* net) { m_notify = notify; m_weather = weather; m_net = net; }
+    void OpenTray() { ToggleFlyout(m_tray, m_layout.chevron); }
 
 private:
     static constexpr UINT WM_APPBAR = WM_USER + 1;
-    enum class Hit { None, Start, Item, Chevron, Quick, Clock, Desktop, Right, Dock };
+    enum class Hit { None, Start, Item, Chevron, Quick, Network, Clock, Bell, Weather, Desktop, Right, Dock };
 
     struct LayoutInfo {
-        core::Rect dock, right, start, chevron, quick, clock, desktop;
+        core::Rect dock, right, start, chevron, quick, network, clock, bell, weather, desktop;
         std::vector<core::Rect> items;
     };
 
@@ -90,6 +94,7 @@ private:
     void ShowBarMenu();
     void ActivateWindow(HWND hwnd);
     void AdjustVolume(float delta);
+    void ToggleFlyout(Flyout* panel, const core::Rect& anchor);
 
     void ComputeLayout();
     void ComputeTooltip();
@@ -97,6 +102,7 @@ private:
     void Render();
     void DrawPill(ID2D1DeviceContext* ctx, const core::Rect& r, float radius);
     void DrawStartLogo(ID2D1DeviceContext* ctx, const core::Vec2& c, float size, float alpha);
+    void DrawWeatherIcon(ID2D1DeviceContext* ctx, const core::Vec2& c, float size, int kind);
     void DrawBattery(ID2D1DeviceContext* ctx, float x, float cy, int percent, bool charging);
     void DrawText(ID2D1DeviceContext* ctx, const std::wstring& t, IDWriteTextFormat* f,
                   const D2D1_RECT_F& r, const core::Color& c);
@@ -107,6 +113,7 @@ private:
     HMONITOR m_mon{nullptr};
     bool m_primary{false};
     StartMenu* m_start{nullptr};
+    Flyout *m_quick{nullptr}, *m_calendar{nullptr}, *m_tray{nullptr}, *m_notify{nullptr}, *m_weather{nullptr}, *m_net{nullptr};
     std::unique_ptr<render::DCompLayer> m_dcomp;
     ComPtr<ID2D1SolidColorBrush> m_brush;
 
@@ -146,6 +153,13 @@ private:
 
     ComPtr<IDWriteTextFormat> m_fontTip, m_fontTime, m_fontDate, m_fontIcon;
     bool m_hasIconFont{false};
+    int m_netKind{0};            // 0 = offline, 1 = Wi-Fi, 2 = Ethernet
+    float m_netTimer{10.0f};
+    float m_weatherTimer{10.0f};
+    int m_weatherKind{0};
+    std::wstring m_weatherText;
+    int m_weatherTemp{0};
+    bool m_weatherValid{false};
     UINT m_taskbarCreatedMsg{0};
 };
 

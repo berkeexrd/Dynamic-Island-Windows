@@ -1,0 +1,14 @@
+# build output
+build/
+out/
+graphify-out/
+*.old.exe
+# runtime files
+*.log
+imgui.ini
+.graphifyignore
+CLAUDE.md
+.vs/
+.claude/
+open_settings.bat
+build_check.bat

@@ -48,8 +48,8 @@ bool Toggle(const char* id, bool* value) {
     const ImGuiStyle& style = g.Style;
     const ImGuiID widgetId = window->GetID(id);
 
-    const float width = 42.0f;
-    const float height = 22.0f;
+    const float width = Sc(42.0f);
+    const float height = Sc(22.0f);
     const ImVec2 pos = window->DC.CursorPos;
     const ImRect bb(pos, ImVec2(pos.x + width, pos.y + height));
 
@@ -82,9 +82,9 @@ bool Toggle(const char* id, bool* value) {
     window->DrawList->AddRect(bb.Min, bb.Max, ImGui::GetColorU32(hovered ? theme.BorderHover : theme.Border), height * 0.5f, 0, 1.0f);
 
     // Knob
-    const float knobRadius = (height - 6.0f) * 0.5f;
-    const float knobMinX = bb.Min.x + 3.0f + knobRadius;
-    const float knobMaxX = bb.Max.x - 3.0f - knobRadius;
+    const float knobRadius = (height - Sc(6.0f)) * 0.5f;
+    const float knobMinX = bb.Min.x + Sc(3.0f) + knobRadius;
+    const float knobMaxX = bb.Max.x - Sc(3.0f) - knobRadius;
     const float knobX = knobMinX + (knobMaxX - knobMinX) * animT;
     const float knobY = bb.Min.y + height * 0.5f;
 
@@ -227,59 +227,75 @@ bool Keybind(const char* id, int* currentKey, bool* isCapturing) {
     return false;
 }
 
+static bool s_firstRow = true;
+
 void Section(const char* title, const char* description, const std::function<void()>& content) {
     const auto& theme = Theme::Instance().Colors();
 
-    ImGui::Spacing();
+    ImGui::Dummy(ImVec2(0.0f, Sc(6.0f)));
+    if (FontBold) ImGui::PushFont(FontBold);
     ImGui::TextColored(theme.TextPrimary, "%s", title);
+    if (FontBold) ImGui::PopFont();
     if (description && description[0]) {
+        if (FontSmall) ImGui::PushFont(FontSmall);
         ImGui::TextColored(theme.TextMuted, "%s", description);
+        if (FontSmall) ImGui::PopFont();
     }
-    ImGui::Spacing();
+    ImGui::Dummy(ImVec2(0.0f, Sc(4.0f)));
 
-    // Section card surface
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, theme.SurfaceElevated);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, theme.Surface);
     ImGui::PushStyleColor(ImGuiCol_Border, theme.BorderSubtle);
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, Radius::MD);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, Sc(14.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Spacing::LG, Spacing::MD));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Sc(22.0f), Sc(4.0f)));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(Sc(12.0f), 0.0f));
 
-    char childId[64];
+    char childId[96];
     snprintf(childId, sizeof(childId), "sec_%s", title);
-    ImGui::BeginChild(childId, ImVec2(0, 0), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_Borders);
-
+    ImGui::BeginChild(childId, ImVec2(0, 0), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar);
+    s_firstRow = true;
     content();
-
     ImGui::EndChild();
-    ImGui::PopStyleVar(3);
+    ImGui::PopStyleVar(4);
     ImGui::PopStyleColor(2);
-    ImGui::Spacing();
+    ImGui::Dummy(ImVec2(0.0f, Sc(10.0f)));
 }
 
 void SettingRow(const char* label, const char* description, const std::function<void(float controlWidth)>& renderControl) {
     const auto& theme = Theme::Instance().Colors();
-    float availWidth = ImGui::GetContentRegionAvail().x;
-    float controlWidth = 180.0f;
-    float labelWidth = availWidth - controlWidth - Spacing::MD;
+    const float availW = ImGui::GetContentRegionAvail().x;
+    const float controlW = Sc(210.0f);
+    const float labelW = availW - controlW - Sc(28.0f);
+    const float padY = Sc(13.0f);
 
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 screen = ImGui::GetCursorScreenPos();
+    if (!s_firstRow) dl->AddLine(ImVec2(screen.x, screen.y), ImVec2(screen.x + availW, screen.y), ImGui::GetColorU32(theme.BorderSubtle), 1.0f);
+    s_firstRow = false;
+
+    const ImVec2 start = ImGui::GetCursorPos();
+    ImGui::SetCursorPos(ImVec2(start.x, start.y + padY));
     ImGui::BeginGroup();
-    ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + labelWidth);
+    ImGui::PushTextWrapPos(start.x + labelW);
     ImGui::TextColored(theme.TextPrimary, "%s", label);
     if (description && description[0]) {
-        ImGui::TextColored(theme.TextSecondary, "%s", description);
+        if (FontSmall) ImGui::PushFont(FontSmall);
+        ImGui::TextColored(theme.TextMuted, "%s", description);
+        if (FontSmall) ImGui::PopFont();
     }
     ImGui::PopTextWrapPos();
     ImGui::EndGroup();
+    const float labelH = ImGui::GetItemRectSize().y;
+    const float rowH = std::max(labelH + padY + padY, Sc(58.0f));
 
-    ImGui::SameLine(availWidth - controlWidth);
-    ImGui::SetNextItemWidth(controlWidth);
+    ImGui::SetCursorPos(ImVec2(start.x + availW - controlW, start.y + (rowH - Sc(30.0f)) * 0.5f));
+    ImGui::SetNextItemWidth(controlW);
+    renderControl(controlW);
 
-    renderControl(controlWidth);
-
-    ImGui::Spacing();
+    ImGui::SetCursorPos(ImVec2(start.x, start.y + rowH));
 }
 
-bool SidebarItem(const char* id, const char* label, bool isSelected, float height) {
+bool SidebarItem(const char* id, const char* label, bool isSelected, float height, const char* iconUtf8) {
     ImGuiWindow* window = ImGui::GetCurrentWindow();
     if (window->SkipItems) return false;
 
@@ -287,7 +303,7 @@ bool SidebarItem(const char* id, const char* label, bool isSelected, float heigh
     const ImGuiStyle& style = g.Style;
     const ImGuiID widgetId = window->GetID(id);
 
-    float availX = ImGui::GetContentRegionAvail().x;
+    const float availX = ImGui::GetContentRegionAvail().x;
     const ImVec2 pos = window->DC.CursorPos;
     const ImRect bb(pos, ImVec2(pos.x + availX, pos.y + height));
 
@@ -295,34 +311,32 @@ bool SidebarItem(const char* id, const char* label, bool isSelected, float heigh
     if (!ImGui::ItemAdd(bb, widgetId)) return false;
 
     bool hovered, held;
-    bool pressed = ImGui::ButtonBehavior(bb, widgetId, &hovered, &held);
-
-    // Micro-animation for selection glide & hover
-    float targetAnim = isSelected ? 1.0f : 0.0f;
-    float animT = AnimationEngine::Instance().AnimateFloat(widgetId, targetAnim, AnimationSpeed::Normal);
-
+    const bool pressed = ImGui::ButtonBehavior(bb, widgetId, &hovered, &held);
+    const float sel = AnimationEngine::Instance().AnimateFloat(widgetId, isSelected ? 1.0f : 0.0f, AnimationSpeed::Normal);
     const auto& theme = Theme::Instance().Colors();
 
-    // Background
-    if (isSelected || hovered) {
-        ImVec4 bgCol = isSelected ? theme.SurfaceActive : theme.SurfaceHover;
-        window->DrawList->AddRectFilled(bb.Min, bb.Max, ImGui::GetColorU32(bgCol), Radius::SM);
+    if (sel > 0.01f) {
+        ImVec4 bg = theme.Accent; bg.w = 0.16f * sel;
+        window->DrawList->AddRectFilled(bb.Min, bb.Max, ImGui::GetColorU32(bg), Sc(10.0f));
+        ImVec4 edge = theme.Accent; edge.w = 0.30f * sel;
+        window->DrawList->AddRect(bb.Min, bb.Max, ImGui::GetColorU32(edge), Sc(10.0f), 0, 1.0f);
+        const float barH = height * 0.42f;
+        window->DrawList->AddRectFilled(ImVec2(bb.Min.x + 1.0f, bb.Min.y + (height - barH) * 0.5f), ImVec2(bb.Min.x + Sc(4.0f), bb.Min.y + (height + barH) * 0.5f), ImGui::GetColorU32(theme.Accent), Sc(2.0f));
+    } else if (hovered) {
+        window->DrawList->AddRectFilled(bb.Min, bb.Max, ImGui::GetColorU32(ImVec4(1, 1, 1, 0.05f)), Sc(10.0f));
     }
-
-    // Left active indicator glide bar (Master Rules v4)
-    if (animT > 0.01f) {
-        float barH = height * 0.55f * animT;
-        float barY = bb.Min.y + (height - barH) * 0.5f;
-        ImVec2 indMin(bb.Min.x + 2.0f, barY);
-        ImVec2 indMax(bb.Min.x + 5.0f, barY + barH);
-        window->DrawList->AddRectFilled(indMin, indMax, ImGui::GetColorU32(theme.Accent), 2.0f);
-    }
-
-    // Text label
     ImVec4 textCol = isSelected ? theme.TextPrimary : (hovered ? theme.TextSecondary : theme.TextMuted);
-    ImVec2 textPos(bb.Min.x + Spacing::LG, bb.Min.y + (height - ImGui::GetFontSize()) * 0.5f);
+    float textX = bb.Min.x + Sc(18.0f);
+    if (iconUtf8 && FontIcons) {
+        ImGui::PushFont(FontIcons);
+        const ImVec2 isz = ImGui::CalcTextSize(iconUtf8);
+        ImVec4 ic = isSelected ? theme.AccentHover : textCol;
+        window->DrawList->AddText(ImVec2(bb.Min.x + Sc(16.0f), bb.Min.y + (height - isz.y) * 0.5f), ImGui::GetColorU32(ic), iconUtf8);
+        ImGui::PopFont();
+        textX = bb.Min.x + Sc(46.0f);
+    }
+    const ImVec2 textPos(textX, bb.Min.y + (height - ImGui::GetFontSize()) * 0.5f);
     window->DrawList->AddText(textPos, ImGui::GetColorU32(textCol), label);
-
     return pressed;
 }
 

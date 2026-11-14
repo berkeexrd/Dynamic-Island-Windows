@@ -1,6 +1,10 @@
 #include "aether/island/island_window.hpp"
+#include "aether/render/glass.hpp"
 #include "aether/config/config_manager.hpp"
 #include "aether/core/log.hpp"
+#include "aether/core/i18n.hpp"
+#include "aether/render/context_menu.hpp"
+#include "aether/widgets/widget_window.hpp"
 #include <ctime>
 #include <cmath>
 #include <cwchar>
@@ -795,7 +799,15 @@ void IslandWindow::Render() {
 
     // Off-screen passes must happen before the main BeginDraw
     ComPtr<ID2D1CommandList> shadowCl, contentCl;
-    if (geo && app.enableShadow && m_shadowEffect) shadowCl = RecordShadow(ctx, geo.Get());
+    render::CachedGlow shadowCache;
+    const bool expandedShadow = m_currentMode != IslandMode::Idle && m_currentMode != IslandMode::VolumeHUD;
+    if (geo && app.enableShadow && m_shadowEffect) {
+        // once the island's shape rests, its shadow is kept as a bitmap instead of being re-blurred every frame
+        shadowCache = render::StableGlow(m_dcomp.get(), {geo.Get()},
+            {{(expandedShadow ? 11.0f : 7.0f) * s, 0.0f, (expandedShadow ? 8.0f : 4.0f) * s,
+              Color{0.0f, 0.0f, 0.0f, (expandedShadow ? 0.62f : 0.45f) * app.shadowIntensity}}}, 40.0f * s);
+        if (!shadowCache) shadowCl = RecordShadow(ctx, geo.Get());
+    }
     const bool blurPass = geo && alpha < 0.985f && m_blurEffect && !m_isGamingSuspended;
     if (blurPass) contentCl = RecordContent(ctx, b);
 
@@ -808,7 +820,9 @@ void IslandWindow::Render() {
     }
 
     // 1. Soft contact shadow
-    if (shadowCl) {
+    if (shadowCache) {
+        render::DrawCachedGlow(dc, shadowCache);
+    } else if (shadowCl) {
         const bool expanded = m_currentMode != IslandMode::Idle && m_currentMode != IslandMode::VolumeHUD;
         m_shadowEffect->SetInput(0, shadowCl.Get());
         m_shadowEffect->SetValue(D2D1_SHADOW_PROP_BLUR_STANDARD_DEVIATION, (expanded ? 11.0f : 7.0f) * s);
@@ -1413,13 +1427,17 @@ LRESULT IslandWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
         case WM_LBUTTONUP: {
             const Vec2 p{static_cast<float>(GET_X_LPARAM(lParam)), static_cast<float>(GET_Y_LPARAM(lParam))};
+            // ReleaseCapture() sends WM_CAPTURECHANGED synchronously, which clears the press / drag state:
+            // remember it first, otherwise the buttons and the seek bar never see the release.
+            const Control dragging = m_dragging, pressedBefore = m_pressed;
             if (GetCapture() == hwnd) ReleaseCapture();
 
-            if (m_dragging != Control::None) {
+            if (dragging != Control::None) {
+                m_dragging = dragging;
                 EndDrag(true);
-            } else if (m_pressed != Control::None) {
+            } else if (pressedBefore != Control::None) {
                 // Buttons fire on release (and only if the pointer is still on them), like real UI
-                const Control pressed = m_pressed;
+                const Control pressed = pressedBefore;
                 m_pressed = Control::None;
                 if (HitTestControl(p) == pressed) {
                     auto& media = media::MediaService::Instance();
@@ -1441,21 +1459,24 @@ LRESULT IslandWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         case WM_RBUTTONUP: {
             POINT pt;
             GetCursorPos(&pt);
-            HMENU hMenu = CreatePopupMenu();
-            AppendMenuW(hMenu, MF_STRING, 1001, L"Open AETHER Settings Center");
-            AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-            AppendMenuW(hMenu, MF_STRING, 1002, L"Toggle Desktop Widgets");
-            AppendMenuW(hMenu, MF_STRING, 1003, L"Cycle Island Mode");
-            AppendMenuW(hMenu, MF_STRING, 1004, L"Test Notification");
-            AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-            AppendMenuW(hMenu, MF_STRING, 1005, L"Exit Aether");
-
+            using namespace aether::ui;
+            namespace i18n = aether::i18n;
             SetForegroundWindow(hwnd);
-            const int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_NONOTIFY, pt.x, pt.y, 0, hwnd, nullptr);
-            DestroyMenu(hMenu);
+            const int cmd = ShowContextMenu({
+                MenuItem(1001, i18n::Pick(L"Open Settings Center", L"Ayar Merkezini Aç"), 0xE713),
+                MenuSeparator(),
+                MenuItem(1002, i18n::Pick(L"Toggle desktop widgets", L"Masaüstü widget'larını aç/kapat"), 0xE8A1),
+                MenuItem(1003, i18n::Pick(L"Cycle island mode", L"Ada modunu değiştir"), 0xE72C),
+                MenuItem(1004, i18n::Pick(L"Test notification", L"Bildirimi dene"), 0xEA8F),
+                MenuSeparator(),
+                MenuItem(1005, i18n::Pick(L"Exit Aether", L"Aether'den çık"), 0xE7E8, true)}, pt);
 
             if (cmd == 1001) {
                 PostMessage(hwnd, WM_USER + 100, 0, 0);
+            } else if (cmd == 1002) {
+                static bool widgetsOn = true;
+                widgetsOn = !widgetsOn;
+                widgets::WidgetManager::Instance().SetVisible(widgetsOn);
             } else if (cmd == 1003) {
                 if (m_currentMode == IslandMode::Idle) SetMode(IslandMode::MediaExpanded);
                 else if (m_currentMode == IslandMode::MediaExpanded) SetMode(IslandMode::SystemExpanded);

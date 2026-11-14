@@ -70,10 +70,14 @@ struct WidgetsConfig {
     bool enabled{true};
     bool snapToGrid{true};
     float gridSize{16.0f};
-    DesktopWidgetConfig sysMonWidget{true, {40.0f, 60.0f}, {230.0f, 130.0f}, 0.90f, false};
-    DesktopWidgetConfig clockWidget{true, {40.0f, 210.0f}, {230.0f, 90.0f}, 0.90f, false};
-    DesktopWidgetConfig netWidget{true, {40.0f, 320.0f}, {230.0f, 90.0f}, 0.90f, false};
+    // A negative position means "not placed yet": the widgets then stack on the right edge of the primary monitor.
+    DesktopWidgetConfig sysMonWidget{true, {-1.0f, -1.0f}, {300.0f, 172.0f}, 0.90f, false};
+    DesktopWidgetConfig clockWidget{true, {-1.0f, -1.0f}, {300.0f, 108.0f}, 0.90f, false};
+    DesktopWidgetConfig netWidget{true, {-1.0f, -1.0f}, {300.0f, 150.0f}, 0.90f, false};
     DesktopWidgetConfig mediaWidget{false, {40.0f, 430.0f}, {280.0f, 110.0f}, 0.90f, false};
+    DesktopWidgetConfig storageWidget{true, {-1.0f, -1.0f}, {300.0f, 160.0f}, 0.90f, false};
+    DesktopWidgetConfig weatherWidget{true, {-1.0f, -1.0f}, {300.0f, 180.0f}, 0.90f, false};
+    DesktopWidgetConfig nowWidget{true, {-1.0f, -1.0f}, {300.0f, 100.0f}, 0.90f, false};
 };
 
 struct TaskbarConfig {
@@ -86,8 +90,8 @@ struct TaskbarConfig {
 
 struct AppearanceConfig {
     ThemePreset preset{ThemePreset::AetherDark};
-    uint32_t accentColor{0xFF0078D4}; // Fluent Blue
-    uint32_t secondaryAccent{0xFF7000FF};
+    uint32_t accentColor{0xFF8B5CF6}; // violet
+    uint32_t secondaryAccent{0xFF5B3DF5};
     float cornerRadius{18.0f};
     float backgroundOpacity{0.92f};
     float glowIntensity{0.35f};
@@ -115,6 +119,9 @@ struct GamingModeConfig {
 
 struct AppConfig {
     bool launchOnStartup{false};
+    bool firstRunDone{false};     // false until the welcome / first-setup page was completed
+    bool autoWallpaper{true};     // set a wallpaper that matches the chosen theme
+    int  language{0};             // 0 = follow Windows, 1 = English, 2 = Turkish
     bool minimizeToTray{true};
     int monitorIndex{0};
     float uiScale{1.0f};

@@ -9,9 +9,13 @@
 #include <netioapi.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
+#include <pdh.h>
+#include <pdhmsg.h>
+#include <chrono>
 
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "pdh.lib")
 
 namespace aether::system {
 
@@ -31,6 +35,8 @@ void MetricsCollector::Start(uint32_t intervalMs) {
         m_metrics.cpuHistory.assign(30, 0.0f);
         m_metrics.ramHistory.assign(30, 0.0f);
         m_metrics.netDownHistory.assign(30, 0.0f);
+        m_metrics.netUpHistory.assign(30, 0.0f);
+        m_metrics.gpuHistory.assign(30, 0.0f);
     }
 
     m_workerThread = std::thread(&MetricsCollector::WorkerLoop, this);
@@ -43,6 +49,7 @@ void MetricsCollector::Stop() {
     if (m_workerThread.joinable()) {
         m_workerThread.join();
     }
+    ShutdownPdh();
     AETHER_LOG_INFO("MetricsCollector stopped");
 }
 
@@ -144,6 +151,11 @@ void MetricsCollector::QueryNetwork() {
             m_metrics.netDownHistory.erase(m_metrics.netDownHistory.begin());
             m_metrics.netDownHistory.push_back(downKb);
         }
+        if (!m_metrics.netUpHistory.empty()) {
+            float upKb = static_cast<float>(m_metrics.netUploadBytesPerSec) / 1024.0f;
+            m_metrics.netUpHistory.erase(m_metrics.netUpHistory.begin());
+            m_metrics.netUpHistory.push_back(upKb);
+        }
     }
 }
 
@@ -173,13 +185,48 @@ void MetricsCollector::QueryGpu() {
                 if (SUCCEEDED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &memInfo))) {
                     m_metrics.vramUsedBytes = memInfo.CurrentUsage;
                     m_metrics.vramTotalBytes = memInfo.Budget;
-                    if (memInfo.Budget > 0) {
+                    // Fallback when the PDH counter is unavailable: show VRAM pressure.
+                    if (memInfo.Budget > 0 && !m_pdhCounter) {
                         m_metrics.gpuUsagePercent = static_cast<float>(memInfo.CurrentUsage) / static_cast<float>(memInfo.Budget) * 100.0f;
                     }
                 }
             }
         }
     }
+}
+
+// Real GPU utilisation: the sum of all 3D-engine counters (what Task Manager shows), clamped to 100 %.
+void MetricsCollector::QueryGpuLoad() {
+    if (!m_pdhTried) {
+        m_pdhTried = true;
+        PDH_HQUERY q = nullptr;
+        PDH_HCOUNTER c = nullptr;
+        if (PdhOpenQueryW(nullptr, 0, &q) == ERROR_SUCCESS) {
+            if (PdhAddEnglishCounterW(q, L"\\GPU Engine(*engtype_3D)\\Utilization Percentage", 0, &c) == ERROR_SUCCESS) {
+                m_pdhQuery = q; m_pdhCounter = c;
+                PdhCollectQueryData(q);
+            } else {
+                PdhCloseQuery(q);
+            }
+        }
+    }
+    if (!m_pdhCounter) return;
+    auto q = static_cast<PDH_HQUERY>(m_pdhQuery);
+    auto c = static_cast<PDH_HCOUNTER>(m_pdhCounter);
+    if (PdhCollectQueryData(q) != ERROR_SUCCESS) return;
+    DWORD bytes = 0, count = 0;
+    PDH_STATUS st = PdhGetFormattedCounterArrayW(c, PDH_FMT_DOUBLE, &bytes, &count, nullptr);
+    if (st != PDH_MORE_DATA || bytes == 0) return;
+    std::vector<char> buf(bytes);
+    auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(buf.data());
+    if (PdhGetFormattedCounterArrayW(c, PDH_FMT_DOUBLE, &bytes, &count, items) != ERROR_SUCCESS) return;
+    double sum = 0.0;
+    for (DWORD i = 0; i < count; ++i) if (items[i].FmtValue.CStatus == PDH_CSTATUS_VALID_DATA || items[i].FmtValue.CStatus == PDH_CSTATUS_NEW_DATA) sum += items[i].FmtValue.doubleValue;
+    m_metrics.gpuUsagePercent = static_cast<float>(std::clamp(sum, 0.0, 100.0));
+}
+
+void MetricsCollector::ShutdownPdh() {
+    if (m_pdhQuery) { PdhCloseQuery(static_cast<PDH_HQUERY>(m_pdhQuery)); m_pdhQuery = nullptr; m_pdhCounter = nullptr; }
 }
 
 void MetricsCollector::WorkerLoop() {
@@ -192,7 +239,9 @@ void MetricsCollector::WorkerLoop() {
                 QueryNetwork();
                 QueryBattery();
                 QueryUptime();
+                QueryGpuLoad();
                 QueryGpu();
+                if (!m_metrics.gpuHistory.empty()) { m_metrics.gpuHistory.erase(m_metrics.gpuHistory.begin()); m_metrics.gpuHistory.push_back(m_metrics.gpuUsagePercent); }
             }
 
             core::EventBus::Instance().Publish(MetricsUpdatedEvent{GetMetrics()});

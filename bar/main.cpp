@@ -10,6 +10,11 @@
 #include <vector>
 #include "aether/bar/aether_bar.hpp"
 #include "aether/bar/start_menu.hpp"
+#include "aether/bar/flyouts.hpp"
+#include "aether/bar/panels.hpp"
+#include "aether/bar/tray_host.hpp"
+#include "aether/bar/weather.hpp"
+#include "aether/core/i18n.hpp"
 #include "aether/core/monitors.hpp"
 
 using namespace aether::bar;
@@ -62,19 +67,40 @@ public:
     bool Init() {
         if (!m_start.Create()) return false;
         m_start.PreloadAsync();
+        WeatherService::Instance().Start();
+        // Panels use unique window classes; they are shared by every bar.
+        m_quick.Create(L"Aether.QuickPanel");
+        m_calendar.Create(L"Aether.CalendarPanel");
+        m_tray.Create(L"Aether.TrayPanel");
+        m_notify.Create(L"Aether.NotifyPanel");
+        m_weatherPanel.Create(L"Aether.WeatherPanel");
+        m_net.Create(L"Aether.NetPanel");
         ShellTaskbarGuard::Instance().Hide(m_hard);
         Rebuild();
         return !m_bars.empty();
     }
 
+    // The tray host is torn down while the bars are rebuilt and created again once every bar has
+    // registered its AppBar, so apps re-send their icons (TaskbarCreated broadcast).
     void Rebuild() {
+        TrayHost::Instance().Destroy();
         m_bars.clear();
         for (HMONITOR mon : aether::core::EnumerateMonitors()) {
             MONITORINFO mi = {sizeof(mi)};
             GetMonitorInfoW(mon, &mi);
             auto bar = std::make_unique<AetherBar>(mon, (mi.dwFlags & MONITORINFOF_PRIMARY) != 0, &m_start);
-            if (bar->Create()) m_bars.push_back(std::move(bar));
+            if (!bar->Create()) continue;
+            bar->SetPanels(&m_quick, &m_calendar, &m_tray);
+            bar->SetExtraPanels(&m_notify, &m_weatherPanel, &m_net);
+            m_bars.push_back(std::move(bar));
         }
+        if (!m_bars.empty()) TrayHost::Instance().Create();
+    }
+
+    void Shutdown() {
+        WeatherService::Instance().Stop();
+        TrayHost::Instance().Destroy();   // hands the icons back to Explorer
+        m_bars.clear();
     }
 
     void ToggleStart() {
@@ -92,6 +118,14 @@ public:
         bool animating = false;
         for (auto& b : m_bars) animating |= b->Frame(dt);
         animating |= m_start.Frame(dt);
+        animating |= m_quick.Frame(dt);
+        animating |= m_calendar.Frame(dt);
+        animating |= m_tray.Frame(dt);
+        animating |= m_notify.Frame(dt);
+        animating |= m_weatherPanel.Frame(dt);
+        animating |= m_net.Frame(dt);
+        m_pruneTimer += dt;
+        if (m_pruneTimer >= 3.0f) { m_pruneTimer = 0.0f; TrayHost::Instance().Prune(); }
         return animating || m_rebuildAt.has_value();
     }
 
@@ -100,6 +134,13 @@ public:
 private:
     bool m_hard;
     StartMenu m_start;
+    QuickPanel m_quick;
+    CalendarPanel m_calendar;
+    TrayPanel m_tray;
+    NotifyPanel m_notify;
+    WeatherPanel m_weatherPanel;
+    NetPanel m_net;
+    float m_pruneTimer{0.0f};
     std::vector<std::unique_ptr<AetherBar>> m_bars;
     std::optional<std::chrono::steady_clock::time_point> m_rebuildAt;
 };
@@ -127,7 +168,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR cmdLine, int) {
     SetUnhandledExceptionFilter(CrashHandler);
     atexit([] { ShellTaskbarGuard::Instance().Restore(); });
 
-    const bool hard = cmdLine && wcsstr(cmdLine, L"--hide-stock");
+    // The stock taskbar is hidden completely (our own tray replaces it). --keep-stock leaves it on auto-hide.
+    aether::i18n::SetFromCommandLine(cmdLine);
+    const bool hard = !(cmdLine && wcsstr(cmdLine, L"--keep-stock"));
     const bool useHook = !(cmdLine && wcsstr(cmdLine, L"--no-start-hook"));
 
     int rc = 0;
@@ -169,6 +212,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR cmdLine, int) {
             if (!manager.Frame(dt)) MsgWaitForMultipleObjectsEx(0, nullptr, 120, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         }
         if (g_hook) UnhookWindowsHookEx(g_hook);
+        manager.Shutdown();
     }
     ShellTaskbarGuard::Instance().Restore();
     CoUninitialize();

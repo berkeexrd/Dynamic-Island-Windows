@@ -16,7 +16,10 @@ using Microsoft::WRL::ComPtr;
 enum class WidgetType {
     SystemMonitor,
     ClockCalendar,
-    NetworkMeter
+    NetworkMeter,
+    Storage,
+    Weather,
+    NowPlaying
 };
 
 class DesktopWidgetWindow {
@@ -39,6 +42,16 @@ private:
     void RenderSystemMonitor(ID2D1DeviceContext* ctx);
     void RenderClockCalendar(ID2D1DeviceContext* ctx);
     void RenderNetworkMeter(ID2D1DeviceContext* ctx);
+    void RenderStorage(ID2D1DeviceContext* ctx);
+    void RenderWeather(ID2D1DeviceContext* ctx);
+    void RenderNowPlaying(ID2D1DeviceContext* ctx);
+    void UpdateArt();
+    bool m_shownNow{true};
+    float m_time{0};
+    ComPtr<ID2D1Bitmap1> m_art; uint64_t m_artVersion{~0ull};
+    struct Drive { wchar_t letter; std::wstring label; double usedGB, totalGB; };
+    std::vector<Drive> m_drives; ULONGLONG m_drivesAt{0};
+    core::Rect m_btnPrev, m_btnPlay, m_btnNext;
 
     WidgetType m_type;
     HWND m_hwnd{nullptr};
@@ -48,12 +61,24 @@ private:
     POINT m_dragStartCursor{};
     POINT m_dragStartWindow{};
 
-    ComPtr<IDWriteTextFormat> m_fontLarge;
-    ComPtr<IDWriteTextFormat> m_fontMedium;
-    ComPtr<IDWriteTextFormat> m_fontSmall;
+    // Drawing helpers (all coordinates are logical px, the context carries the DPI scale)
+    void DrawText(ID2D1DeviceContext* ctx, const std::wstring& t, IDWriteTextFormat* f, const D2D1_RECT_F& r, const core::Color& c);
+    void DrawRing(ID2D1DeviceContext* ctx, float cx, float cy, float radius, float thickness, float frac,
+                  const std::wstring& value, const std::wstring& label);
+    void DrawSpark(ID2D1DeviceContext* ctx, const std::vector<float>& v, float peak, const core::Rect& r, const core::Color& c, bool fill);
 
-    uint32_t m_width{260};
-    uint32_t m_height{130};
+    ComPtr<IDWriteTextFormat> m_fontLarge;     // clock digits
+    ComPtr<IDWriteTextFormat> m_fontMedium;    // values
+    ComPtr<IDWriteTextFormat> m_fontSmall;     // captions
+    ComPtr<IDWriteTextFormat> m_fontTitle;     // card title
+    ComPtr<IDWriteTextFormat> m_fontCenter;    // centred text inside rings
+    ComPtr<IDWriteTextFormat> m_fontTiny;      // ring labels
+    ComPtr<IDWriteTextFormat> m_fontIcon;      // Segoe Fluent Icons
+    ComPtr<ID2D1SolidColorBrush> m_brush;
+    bool m_hasIconFont{false};
+
+    uint32_t m_width{300};     // logical px
+    uint32_t m_height{172};
     float m_dpiScale{1.0f};
 };
 

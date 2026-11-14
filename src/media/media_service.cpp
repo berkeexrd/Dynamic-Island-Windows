@@ -310,41 +310,34 @@ bool MediaService::FetchAlbumArt(uint64_t& knownVersion, std::vector<uint8_t>& o
     return true;
 }
 
-void MediaService::PlayPause() {
-    try {
-        if (s_sessionManager) {
-            auto session = FindBestSession(s_sessionManager);
-            if (session) {
-                session.TryTogglePlayPauseAsync();
-                return;
+// Transport commands run on their own MTA thread: the UI thread has no WinRT apartment, so calling the session from there
+// silently failed. If the player does not accept the command, the matching media key is sent instead.
+static void RunTransport(int kind) {   // 0 play/pause, 1 next, 2 previous
+    std::thread([kind] {
+        bool ok = false;
+        try { winrt::init_apartment(winrt::apartment_type::multi_threaded); } catch (...) {}
+        try {
+            if (s_sessionManager) {
+                auto session = FindBestSession(s_sessionManager);
+                if (session) {
+                    auto op = kind == 0 ? session.TryTogglePlayPauseAsync() : (kind == 1 ? session.TrySkipNextAsync() : session.TrySkipPreviousAsync());
+                    ok = op.get();
+                }
             }
+        } catch (...) {}
+        if (!ok) {
+            const WORD vk = kind == 0 ? VK_MEDIA_PLAY_PAUSE : (kind == 1 ? VK_MEDIA_NEXT_TRACK : VK_MEDIA_PREV_TRACK);
+            INPUT in[2] = {};
+            in[0].type = INPUT_KEYBOARD; in[0].ki.wVk = vk;
+            in[1].type = INPUT_KEYBOARD; in[1].ki.wVk = vk; in[1].ki.dwFlags = KEYEVENTF_KEYUP;
+            SendInput(2, in, sizeof(INPUT));
         }
-    } catch (...) {}
+    }).detach();
 }
 
-void MediaService::NextTrack() {
-    try {
-        if (s_sessionManager) {
-            auto session = FindBestSession(s_sessionManager);
-            if (session) {
-                session.TrySkipNextAsync();
-                return;
-            }
-        }
-    } catch (...) {}
-}
-
-void MediaService::PreviousTrack() {
-    try {
-        if (s_sessionManager) {
-            auto session = FindBestSession(s_sessionManager);
-            if (session) {
-                session.TrySkipPreviousAsync();
-                return;
-            }
-        }
-    } catch (...) {}
-}
+void MediaService::PlayPause() { RunTransport(0); }
+void MediaService::NextTrack() { RunTransport(1); }
+void MediaService::PreviousTrack() { RunTransport(2); }
 
 void MediaService::Seek(double seconds) {
     std::lock_guard<std::mutex> lock(m_mutex);

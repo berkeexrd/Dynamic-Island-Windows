@@ -27,7 +27,7 @@ namespace UI {
     void SettingRow(const char* label, const char* description, const std::function<void(float controlWidth)>& renderControl);
 
     // Navigation & Badges
-    bool SidebarItem(const char* id, const char* label, bool isSelected, float height = 40.0f);
+    bool SidebarItem(const char* id, const char* label, bool isSelected, float height = 40.0f, const char* iconUtf8 = nullptr);
     void StatusBadge(const char* label, const ImVec4& color);
     void Tooltip(const char* text);
 

@@ -75,6 +75,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
             AETHER_LOG_ERROR("Could not create SettingsWindow");
         }
         AETHER_LOG_DEBUG("SettingsWindow initialized");
+        if (!config::ConfigManager::Instance().Get().firstRunDone) ui::SettingsWindow::Instance().Show(true);   // first-run setup page
 
     // Subscribe to Gaming Mode state changes
     core::EventBus::Instance().Subscribe<system::GamingModeChangedEvent>([&](const system::GamingModeChangedEvent& evt) {
@@ -186,9 +187,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
         // Only sleep when 100% idle and resting to yield 0% CPU.
         if (!isAnimating) {
             MsgWaitForMultipleObjectsEx(0, nullptr, 250, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
-        } else if (island && !island->IsSpringDriven() && !ui::SettingsWindow::Instance().IsVisible()) {
+        } else if (island && !island->IsSpringDriven()) {
             // Only ambient motion (audio bars, scrolling title): 60 fps is plenty and saves GPU/CPU.
-            MsgWaitForMultipleObjectsEx(0, nullptr, 16, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            // With the settings window open, ~120 fps keeps it fluid without redrawing at the monitor's full rate.
+            MsgWaitForMultipleObjectsEx(0, nullptr, ui::SettingsWindow::Instance().IsVisible() ? 7 : 16, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         }
     }
 

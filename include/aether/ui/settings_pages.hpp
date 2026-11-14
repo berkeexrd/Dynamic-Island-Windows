@@ -23,6 +23,9 @@ enum class SettingsTab {
 class SettingsPages {
 public:
     static void Render(SettingsTab activeTab);
+    // First-run welcome / setup page (language, theme, autostart, wallpaper). Replaces the normal layout until finished.
+    static bool WelcomeNeeded();
+    static void RenderWelcome(float width, float height);
 
 private:
     static void RenderGeneral();

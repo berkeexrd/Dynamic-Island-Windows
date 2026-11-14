@@ -48,6 +48,9 @@ bool ConfigManager::Save() {
     try {
         nlohmann::json j;
         j["launchOnStartup"] = m_config.launchOnStartup;
+        j["firstRunDone"] = m_config.firstRunDone;
+        j["autoWallpaper"] = m_config.autoWallpaper;
+        j["language"] = m_config.language;
         j["minimizeToTray"] = m_config.minimizeToTray;
         j["monitorIndex"] = m_config.monitorIndex;
         j["uiScale"] = m_config.uiScale;
@@ -80,8 +83,8 @@ bool ConfigManager::Save() {
         auto serializeWidget = [](const DesktopWidgetConfig& w) {
             return nlohmann::json{
                 {"enabled", w.enabled},
-                {"posX", w.position.x},
-                {"posY", w.position.y},
+                {"x", w.position.x},   // new keys: positions saved by older layouts are ignored once
+                {"y", w.position.y},
                 {"sizeW", w.size.x},
                 {"sizeH", w.size.y},
                 {"opacity", w.opacity},
@@ -93,6 +96,9 @@ bool ConfigManager::Save() {
         j["widgets"]["clock"] = serializeWidget(m_config.widgets.clockWidget);
         j["widgets"]["network"] = serializeWidget(m_config.widgets.netWidget);
         j["widgets"]["media"] = serializeWidget(m_config.widgets.mediaWidget);
+        j["widgets"]["storage"] = serializeWidget(m_config.widgets.storageWidget);
+        j["widgets"]["weather"] = serializeWidget(m_config.widgets.weatherWidget);
+        j["widgets"]["nowPlaying"] = serializeWidget(m_config.widgets.nowWidget);
 
         // Taskbar
         j["taskbar"]["enabled"] = m_config.taskbar.enabled;
@@ -147,6 +153,9 @@ bool ConfigManager::Load() {
         file >> j;
 
         if (j.contains("launchOnStartup")) m_config.launchOnStartup = j["launchOnStartup"];
+        if (j.contains("firstRunDone")) m_config.firstRunDone = j["firstRunDone"];
+        if (j.contains("autoWallpaper")) m_config.autoWallpaper = j["autoWallpaper"];
+        if (j.contains("language")) m_config.language = j["language"];
         if (j.contains("minimizeToTray")) m_config.minimizeToTray = j["minimizeToTray"];
         if (j.contains("monitorIndex")) m_config.monitorIndex = j["monitorIndex"];
         if (j.contains("uiScale")) m_config.uiScale = j["uiScale"];
@@ -175,8 +184,8 @@ bool ConfigManager::Load() {
 
         auto deserializeWidget = [](const nlohmann::json& jw, DesktopWidgetConfig& w) {
             if (jw.contains("enabled")) w.enabled = jw["enabled"];
-            if (jw.contains("posX")) w.position.x = jw["posX"];
-            if (jw.contains("posY")) w.position.y = jw["posY"];
+            if (jw.contains("x")) w.position.x = jw["x"];
+            if (jw.contains("y")) w.position.y = jw["y"];
             if (jw.contains("sizeW")) w.size.x = jw["sizeW"];
             if (jw.contains("sizeH")) w.size.y = jw["sizeH"];
             if (jw.contains("opacity")) w.opacity = jw["opacity"];
@@ -192,6 +201,9 @@ bool ConfigManager::Load() {
             if (jw.contains("clock")) deserializeWidget(jw["clock"], m_config.widgets.clockWidget);
             if (jw.contains("network")) deserializeWidget(jw["network"], m_config.widgets.netWidget);
             if (jw.contains("media")) deserializeWidget(jw["media"], m_config.widgets.mediaWidget);
+            if (jw.contains("storage")) deserializeWidget(jw["storage"], m_config.widgets.storageWidget);
+            if (jw.contains("weather")) deserializeWidget(jw["weather"], m_config.widgets.weatherWidget);
+            if (jw.contains("nowPlaying")) deserializeWidget(jw["nowPlaying"], m_config.widgets.nowWidget);
         }
 
         if (j.contains("taskbar")) {

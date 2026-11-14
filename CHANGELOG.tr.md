@@ -1,5 +1,33 @@
 # Değişiklik Günlüğü
 
+## [Yayınlanmadı]
+
+### Ağ merkezi, widget'lar, temalar
+- Yeni ağ paneli: Wi-Fi anahtarı, animasyonlu mevcut bağlantı, taranan ağ listesi, şifreyle bağlanma (WPA2/WPA3/açık), bağlantıyı kesme, ağ ve uçak modu kısayolları.
+- Masaüstü widget'ları: Depolama, Hava Durumu ve Çalan Müzik (oynatma düğmeleriyle). Ayarlardaki widget anahtarları artık gerçekten gösterip gizliyor.
+- Temalar: Klasik ve Lavanta (daha yumuşak mor cam).
+- Tepsi ikonları kendi boyutunda çizilip yüksek kaliteli filtreyle ölçekleniyor (daha net).
+- Bildirim paneli düğmeleri hizalandı.
+
+### Bildirimler, hava durumu, Başlat menüsü, diller
+- Yeni özel bildirim merkezi (Windows bildirim veritabanından gerçek bildirimler, tek tek / toplu temizleme, animasyonlu boş durum, zil üzerinde rozet).
+- Yeni animasyonlu hava durumu paneli: gökyüzü sahnesi (güneş, ay, yıldız, bulut, yağmur, kar, sis, şimşek), ayrıntılar, 12 saatlik şerit, 7 günlük tahmin.
+- Başlat menüsü ve paneller dışarı tıklayınca kapanır; kenar boşluğundaki tıklamalar dock ve uygulamalara geçer.
+- Masaüstünü göster artık ince bir kenar şeridi; hızlı ayarlardaki Masaüstü kutusu Uçak moduna döndü.
+- Tarih, gün ve ay adları Windows diline göre; arayüz metni İngilizce/Türkçe (diğer diller İngilizce).
+- Ayarlar: Görev Çubuğu sayfası kaldırıldı.
+
+### Değişti - yeni mor tasarım (mockup'a uygun)
+- **Başlat menüsü yeniden yazıldı**: sol rayda avatar, kullanıcı adı, gezinme (Başlat, Tüm Uygulamalar, Belgeler, İndirilenler, Müzik, Resimler, Videolar), Ayarlar ve Güç;
+  hap biçimli arama, 6x2 sabit uygulama ızgarası ve Recent klasöründen "Önerilen" listesi. Arama uygulama, ayar, dosya ve web'i kapsar.
+- **Aether Bar**: mor Başlat düğmesi, sol altta hava durumu hapı, sağda ok / ses / ağ / saat+tarih / zil hapı.
+- **Masaüstü widget'ları**: halka göstergeli Sistem Performansı (CPU / RAM / gerçek GPU), Ağ Aktivitesi (indirme+yükleme grafiği), takvim karolu saat kartı; varsayılan konum sağ kenar.
+- Varsayılan vurgu renkleri mor. Arayüz Windows dilini izler; `--lang=en|tr` ile değişir.
+
+### Eklendi
+- **Cam yeniden yapıldı**: buzlu görünüm artık çiziliyor (koyu mor gövde, iç ışıklar, renk geçişli kenar, gerçek Gaussian mor parlama, `render/glass.hpp`); Windows bulanıklığı dikdörtgen kutular çıkardığı için kaldırıldı. Başlat menüsü, bar hapları, açılır paneller ve widget'lar bunu kullanıyor. Widget'lar mockup boyutlarında ve sağ kenarda performans / ağ / saat sırasıyla; eski kayıtlı konumlar bir kez sıfırlanır.
+- `WeatherService` (internet gerekir), PDH ile GPU kullanımı, yükleme geçmişi. Yeni kütüphaneler: `winhttp secur32 windowscodecs shlwapi pdh`.
+
 ## [1.3.0] - 2026-11-13
 
 ### Düzeltildi
@@ -78,3 +106,15 @@
 
 ### Kaldırıldı
 - Sahte blur için her karede masaüstü ekran görüntüsü (`BitBlt`, ~12 fps).
+
+## Sağ tık menüleri ve ayarlar yenilendi
+- Island, bar ve Başlat için modern animasyonlu sağ tık menüsü (eski Win32 menü kaldırıldı).
+- Island'daki oynat/duraklat/ileri-geri tuşu düzeltildi.
+- Ayarlar penceresi yenilendi: çerçevesiz, yuvarlak, ikonlu yüzen kenar çubuğu, başlık paneli.
+- Klasik tema düz Windows 11 görünümüne çevrildi; Lavanta teması eklendi.
+
+## İlk açılış, duvar kağıtları, bildirim ikonları
+- Bildirim kartlarında gerçek uygulama ikonu ve adı; boş durum ve Wi-Fi yazıları ortalandı.
+- İlk açılış karşılama sayfası (dil, tema, Windows ile başlat, duvar kağıdı); varsayılan tema Klasik.
+- Temaya uygun duvar kağıdı (Mor/Gül/Lavanta için mor, diğerleri için siyah) ve geri yükleme seçeneği.
+- Windows ile başlat artık gerçekten çalışıyor (Run kaydı + bar için yönetici oturum görevi); dil ayarı tüm süreçlerde ortak.

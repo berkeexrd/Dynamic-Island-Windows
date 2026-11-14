@@ -1,6 +1,16 @@
 #include "aether/bar/aether_bar.hpp"
+#include "aether/bar/netstate.hpp"
 #include "aether/bar/start_menu.hpp"
+#include "aether/bar/flyouts.hpp"
+#include "aether/bar/ui_common.hpp"
+#include "aether/render/context_menu.hpp"
+#include "aether/bar/weather.hpp"
+#include "aether/bar/notifications.hpp"
+#include "aether/core/i18n.hpp"
+#include "aether/render/glass.hpp"
 #include "aether/core/monitors.hpp"
+#include <winsock2.h>
+#include <iphlpapi.h>
 #include <dwmapi.h>
 #include <mmdeviceapi.h>
 #include <endpointvolume.h>
@@ -15,6 +25,7 @@
 #include <cwctype>
 #include <cstdlib>
 
+#pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
@@ -24,6 +35,7 @@ namespace aether::bar {
 using core::Color;
 using core::Rect;
 using core::Vec2;
+namespace i18n = aether::i18n;
 
 namespace {
 
@@ -37,6 +49,7 @@ constexpr float kPad = 8.0f;
 constexpr ULONGLONG kIconRefreshMs = 8000;
 
 constexpr wchar_t kGlyphChevron = 0xE70E;
+constexpr wchar_t kGlyphBell = 0xEA8F;
 constexpr wchar_t kGlyphMute = 0xE74F;
 constexpr wchar_t kGlyphVol0 = 0xE992;
 constexpr wchar_t kGlyphVol1 = 0xE993;
@@ -155,7 +168,7 @@ HICON WindowIcon(HWND h) {
     return reinterpret_cast<HICON>(GetClassLongPtrW(h, GCLP_HICONSM));
 }
 
-// Opens the *real* Windows flyouts (they keep working while the stock taskbar is hidden)
+// Win+D (show desktop) is the only real Windows shortcut still used; quick settings, calendar and tray are Aether's own panels.
 void SendWinCombo(WORD key) {
     INPUT in[4] = {};
     in[0].type = INPUT_KEYBOARD; in[0].ki.wVk = VK_LWIN;
@@ -182,14 +195,25 @@ ComPtr<IAudioEndpointVolume> DefaultEndpointVolume() {
 //  Stock taskbar guard
 // =============================================================================================
 
+// Explorer's tray window. TrayHost also owns a "Shell_TrayWnd", so skip every window of this process.
+static HWND StockTray() {
+    HWND h = nullptr;
+    while ((h = FindWindowExW(nullptr, h, L"Shell_TrayWnd", nullptr)) != nullptr) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(h, &pid);
+        if (pid != GetCurrentProcessId()) return h;
+    }
+    return nullptr;
+}
+
 static void ForEachShellBar(void (*fn)(HWND)) {
-    if (HWND t = FindWindowW(L"Shell_TrayWnd", nullptr)) fn(t);
+    if (HWND t = StockTray()) fn(t);
     HWND sec = nullptr;
     while ((sec = FindWindowExW(nullptr, sec, L"Shell_SecondaryTrayWnd", nullptr)) != nullptr) fn(sec);
 }
 
 void ShellTaskbarGuard::Hide(bool hard) {
-    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+    HWND tray = StockTray();
     if (!tray) return;
     APPBARDATA abd = {sizeof(abd)};
     abd.hWnd = tray;
@@ -208,7 +232,7 @@ void ShellTaskbarGuard::KeepHidden() {
 }
 
 void ShellTaskbarGuard::Restore() {
-    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+    HWND tray = StockTray();
     if (tray) {
         APPBARDATA abd = {sizeof(abd)};
         abd.hWnd = tray;
@@ -493,9 +517,27 @@ void AetherBar::Tick(float dt) {
     m_refreshTimer += dt;
     if (m_refreshTimer >= 0.35f || m_pinVersion != PinStore::I().version) { m_refreshTimer = 0.0f; RefreshWindows(); }
     m_keepHiddenTimer += dt;
-    if (m_keepHiddenTimer >= 0.6f) { m_keepHiddenTimer = 0.0f; ShellTaskbarGuard::Instance().KeepHidden(); }
+    if (m_keepHiddenTimer >= 0.1f) { m_keepHiddenTimer = 0.0f; ShellTaskbarGuard::Instance().KeepHidden(); }
 
     if (m_primary) {
+        m_netTimer += dt;
+        if (m_netTimer >= 3.0f) {
+            m_netTimer = 0.0f;
+            const NetState ns = QueryNetState();
+            int kind = ns.connected ? (ns.wifi ? 1 : 2) : 0;
+            m_netKind = kind;
+        }
+        m_weatherTimer += dt;
+        if (m_weatherTimer >= 1.0f) {
+            m_weatherTimer = 0.0f;
+            const WeatherNow w = WeatherService::Instance().Get();
+            m_weatherValid = w.valid;
+            if (w.valid) {
+                m_weatherTemp = w.tempC;
+                m_weatherKind = static_cast<int>(WeatherService::KindOf(w.code, w.day));
+                m_weatherText = WeatherService::Describe(w.code, w.day);
+            }
+        }
         m_volTimer += dt;
         if (m_volTimer >= 1.0f) {
             m_volTimer = 0.0f;
@@ -549,11 +591,13 @@ void AetherBar::ComputeLayout() {
 
     SYSTEM_POWER_STATUS ps{};
     const bool battery = m_primary && GetSystemPowerStatus(&ps) && ps.BatteryFlag != 128 && ps.BatteryLifePercent <= 100;
-    const float chevW = m_primary ? 34.0f * s : 0.0f;
-    const float quickW = m_primary ? (battery ? 108.0f : 46.0f) * s : 0.0f;
+    const float chevW = m_primary ? 30.0f * s : 0.0f;
+    const float netW = m_primary ? 34.0f * s : 0.0f;
+    const float bellW = m_primary ? 36.0f * s : 0.0f;
+    const float quickW = m_primary ? (battery ? 104.0f : 40.0f) * s : 0.0f;
     const float clockW = 84.0f * s;
-    const float deskW = 14.0f * s;
-    const float rightW = 10.0f * s + chevW + quickW + clockW + deskW;
+    const float deskW = m_primary ? 34.0f * s : 0.0f;   // show-desktop button
+    const float rightW = 10.0f * s + chevW + quickW + netW + clockW + bellW + deskW;
     const float rx = static_cast<float>(m_windowW) - kMargin * s * 1.4f - rightW;
     m_layout.right = Rect{rx, top, rightW, h};
 
@@ -561,8 +605,11 @@ void AetherBar::ComputeLayout() {
     const float iy = top + 6.0f * s, ih = h - 12.0f * s;
     m_layout.chevron = Rect{cx, iy, chevW, ih}; cx += chevW;
     m_layout.quick = Rect{cx, iy, quickW, ih}; cx += quickW;
+    m_layout.network = Rect{cx, iy, netW, ih}; cx += netW;
     m_layout.clock = Rect{cx, iy, clockW, ih}; cx += clockW;
-    m_layout.desktop = Rect{cx, top + 12.0f * s, deskW, h - 24.0f * s};
+    m_layout.bell = Rect{cx, iy, bellW, ih}; cx += bellW;
+    m_layout.desktop = Rect{cx, iy, deskW, ih};
+    m_layout.weather = m_primary ? Rect{kMargin * s * 1.4f, top, 156.0f * s, h} : Rect{};
 }
 
 void AetherBar::ComputeTooltip() {
@@ -578,11 +625,19 @@ void AetherBar::ComputeTooltip() {
                     anchor = m_layout.items[m_hoverItem].Center().x;
                 }
                 break;
-            case Hit::Start:   text = L"Start"; anchor = m_layout.start.Center().x; break;
-            case Hit::Chevron: text = L"System tray (hidden icons)"; anchor = m_layout.chevron.Center().x; break;
-            case Hit::Quick:   text = L"Quick settings  -  scroll to change volume"; anchor = m_layout.quick.Center().x; break;
-            case Hit::Clock:   text = L"Notifications & calendar"; anchor = m_layout.clock.Center().x; break;
-            case Hit::Desktop: text = L"Show desktop"; anchor = m_layout.desktop.Center().x; break;
+            case Hit::Start:   text = i18n::Pick(L"Start", L"Başlat"); anchor = m_layout.start.Center().x; break;
+            case Hit::Chevron: text = i18n::Pick(L"System tray (hidden icons)", L"Sistem tepsisi (gizli simgeler)"); anchor = m_layout.chevron.Center().x; break;
+            case Hit::Quick:   text = i18n::Pick(L"Quick settings  -  scroll to change volume", L"Hızlı ayarlar  -  ses için kaydırın"); anchor = m_layout.quick.Center().x; break;
+            case Hit::Network: text = m_netKind == 0 ? i18n::Pick(L"No network connection", L"Ağ bağlantısı yok") : i18n::Pick(L"Network", L"Ağ"); anchor = m_layout.network.Center().x; break;
+            case Hit::Clock:   text = i18n::Pick(L"Calendar", L"Takvim"); anchor = m_layout.clock.Center().x; break;
+            case Hit::Bell:    text = i18n::Pick(L"Notifications", L"Bildirimler"); anchor = m_layout.bell.Center().x; break;
+            case Hit::Weather: {
+                const WeatherNow w = WeatherService::Instance().Get();
+                text = w.valid && !w.city.empty() ? w.city : std::wstring(i18n::Pick(L"Weather", L"Hava durumu"));
+                anchor = m_layout.weather.Center().x;
+                break;
+            }
+            case Hit::Desktop: text = i18n::Pick(L"Show desktop", L"Masaüstünü göster"); anchor = m_layout.desktop.Center().x; break;
             default: break;
         }
     }
@@ -618,19 +673,26 @@ void AetherBar::UpdateRegion() {
         for (int i = 0; i < 4; ++i) key.push_back(out[i]);
     };
     std::vector<int> key;
-    int dock[4], right[4], tip[4] = {0, 0, 0, 0};
-    box(m_layout.dock, 14 * s, 8 * s, 18 * s, key, dock);
-    box(m_layout.right, 14 * s, 8 * s, 18 * s, key, right);
+    int dock[4], right[4], wea[4] = {0, 0, 0, 0}, tip[4] = {0, 0, 0, 0};
+    box(m_layout.dock, 26 * s, 26 * s, 26 * s, key, dock);
+    box(m_layout.right, 26 * s, 26 * s, 26 * s, key, right);
+    const bool hasWeather = m_layout.weather.width > 1.0f;
+    if (hasWeather) box(m_layout.weather, 26 * s, 26 * s, 26 * s, key, wea);
     const bool hasTip = m_tipRect.width > 1.0f;
     if (hasTip) box(m_tipRect, 6 * s, 6 * s, 6 * s, key, tip);
     if (key == m_regionKey) return;
     m_regionKey = key;
 
-    const int r = static_cast<int>(40 * s);
+    const int r = static_cast<int>(96 * s);
     HRGN rgn = CreateRoundRectRgn(dock[0], dock[1], dock[2], dock[3], r, r);
     HRGN p2 = CreateRoundRectRgn(right[0], right[1], right[2], right[3], r, r);
     CombineRgn(rgn, rgn, p2, RGN_OR);
     DeleteObject(p2);
+    if (hasWeather) {
+        HRGN pw = CreateRoundRectRgn(wea[0], wea[1], wea[2], wea[3], r, r);
+        CombineRgn(rgn, rgn, pw, RGN_OR);
+        DeleteObject(pw);
+    }
     if (hasTip) {
         HRGN p3 = CreateRoundRectRgn(tip[0], tip[1], tip[2], tip[3], r, r);
         CombineRgn(rgn, rgn, p3, RGN_OR);
@@ -658,30 +720,84 @@ void AetherBar::DrawGlyph(ID2D1DeviceContext* ctx, wchar_t g, const D2D1_RECT_F&
 }
 
 void AetherBar::DrawPill(ID2D1DeviceContext* ctx, const Rect& r, float radius) {
-    const float s = m_dpi;
-    for (int i = 3; i >= 1; --i) {
-        Rect sr{r.x - i * 3.0f * s, r.y + (i * 2.0f + 2.0f) * s, r.width + i * 6.0f * s, r.height + i * 2.0f * s};
-        if (auto g = m_dcomp->CreateSquircleGeometry(sr, radius + i * 3.0f * s)) {
-            m_brush->SetColor(D2D1::ColorF(0, 0, 0, 0.07f));
-            ctx->FillGeometry(g.Get(), m_brush.Get());
-        }
-    }
-    auto geo = m_dcomp->CreateSquircleGeometry(r, radius);
-    if (!geo) return;
-    m_brush->SetColor(D2D1::ColorF(0.055f, 0.055f, 0.07f, 0.92f));
-    ctx->FillGeometry(geo.Get(), m_brush.Get());
-    auto rim = m_dcomp->CreateLinearGradientBrush(Color{1.0f, 1.0f, 1.0f, 0.16f}, Color{1.0f, 1.0f, 1.0f, 0.04f},
-                                                  D2D1::Point2F(r.Center().x, r.Top()), D2D1::Point2F(r.Center().x, r.Bottom()));
-    if (rim) ctx->DrawGeometry(geo.Get(), rim.Get(), 1.0f * s);
+    // The outer glow of all pills is drawn once in Render(); this is only the glass body.
+    if (auto geo = m_dcomp->CreateSquircleGeometry(r, radius))
+        render::DrawGlassBody(ctx, m_dcomp.get(), m_brush.Get(), geo.Get(), r, m_dpi, 0.8f);
 }
 
 void AetherBar::DrawStartLogo(ID2D1DeviceContext* ctx, const Vec2& c, float size, float alpha) {
     const float cell = size * 0.46f, gap = size * 0.08f;
     const float x0 = c.x - cell - gap * 0.5f, y0 = c.y - cell - gap * 0.5f;
-    m_brush->SetColor(D2D1::ColorF(0.38f, 0.80f, 1.0f, alpha));
+    if (render::glass::CurrentTheme().flat) m_brush->SetColor(D2D1::ColorF(ui::kPurpleLight.r, ui::kPurpleLight.g, ui::kPurpleLight.b, alpha));
+    else m_brush->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, alpha));
     for (int iy = 0; iy < 2; ++iy) for (int ix = 0; ix < 2; ++ix) {
         const float x = x0 + ix * (cell + gap), y = y0 + iy * (cell + gap);
         ctx->FillRoundedRectangle(D2D1::RoundedRect(RF(x, y, x + cell, y + cell), size * 0.07f, size * 0.07f), m_brush.Get());
+    }
+}
+
+// Small vector weather glyphs (no icon font needed). kind = WeatherService::Kind.
+void AetherBar::DrawWeatherIcon(ID2D1DeviceContext* ctx, const Vec2& c, float size, int kind) {
+    using K = WeatherService::Kind;
+    const K k = static_cast<K>(kind);
+    auto circle = [&](float x, float y, float r, const Color& col) {
+        m_brush->SetColor(D2D1::ColorF(col.r, col.g, col.b, col.a));
+        ctx->FillEllipse(D2D1::Ellipse(D2D1::Point2F(x, y), r, r), m_brush.Get());
+    };
+    auto cloud = [&](float cx, float cy, float u, const Color& col) {
+        circle(cx - 0.55f * u, cy + 0.12f * u, 0.42f * u, col);
+        circle(cx - 0.05f * u, cy - 0.15f * u, 0.55f * u, col);
+        circle(cx + 0.52f * u, cy + 0.10f * u, 0.44f * u, col);
+        m_brush->SetColor(D2D1::ColorF(col.r, col.g, col.b, col.a));
+        ctx->FillRoundedRectangle(D2D1::RoundedRect(RF(cx - 0.9f * u, cy + 0.10f * u, cx + 0.92f * u, cy + 0.55f * u), 0.22f * u, 0.22f * u), m_brush.Get());
+    };
+    const Color sun{1.0f, 0.80f, 0.22f, 1.0f}, white{0.93f, 0.95f, 1.0f, 1.0f}, grey{0.62f, 0.66f, 0.76f, 1.0f}, blue{0.42f, 0.70f, 1.0f, 1.0f};
+    const float u = size * 0.5f;
+    auto rays = [&](float x, float y, float r) {
+        m_brush->SetColor(D2D1::ColorF(sun.r, sun.g, sun.b, 0.9f));
+        for (int i = 0; i < 8; ++i) {
+            const float a = i * 0.7853982f;
+            ctx->DrawLine(D2D1::Point2F(x + std::cos(a) * r * 1.35f, y + std::sin(a) * r * 1.35f),
+                          D2D1::Point2F(x + std::cos(a) * r * 1.75f, y + std::sin(a) * r * 1.75f), m_brush.Get(), size * 0.07f, nullptr);
+        }
+    };
+    switch (k) {
+        case K::Clear: circle(c.x, c.y, u * 0.55f, sun); rays(c.x, c.y, u * 0.55f); break;
+        case K::PartlyCloudy:
+            circle(c.x - u * 0.28f, c.y - u * 0.28f, u * 0.46f, sun); rays(c.x - u * 0.28f, c.y - u * 0.28f, u * 0.46f);
+            cloud(c.x + u * 0.12f, c.y + u * 0.20f, u * 0.78f, white); break;
+        case K::Cloudy: cloud(c.x, c.y + u * 0.05f, u * 0.95f, white); break;
+        case K::Fog:
+            cloud(c.x, c.y - u * 0.2f, u * 0.85f, grey);
+            m_brush->SetColor(D2D1::ColorF(grey.r, grey.g, grey.b, 0.9f));
+            ctx->DrawLine(D2D1::Point2F(c.x - u * 0.8f, c.y + u * 0.6f), D2D1::Point2F(c.x + u * 0.8f, c.y + u * 0.6f), m_brush.Get(), size * 0.08f, nullptr);
+            break;
+        case K::Rain:
+            cloud(c.x, c.y - u * 0.25f, u * 0.85f, grey);
+            m_brush->SetColor(D2D1::ColorF(blue.r, blue.g, blue.b, 1.0f));
+            for (int i = -1; i <= 1; ++i)
+                ctx->DrawLine(D2D1::Point2F(c.x + i * u * 0.5f, c.y + u * 0.45f), D2D1::Point2F(c.x + i * u * 0.5f - u * 0.14f, c.y + u * 0.85f), m_brush.Get(), size * 0.08f, nullptr);
+            break;
+        case K::Snow:
+            cloud(c.x, c.y - u * 0.25f, u * 0.85f, grey);
+            for (int i = -1; i <= 1; ++i) circle(c.x + i * u * 0.5f, c.y + u * 0.68f, size * 0.05f, white);
+            break;
+        case K::Storm:
+            cloud(c.x, c.y - u * 0.25f, u * 0.85f, grey);
+            m_brush->SetColor(D2D1::ColorF(sun.r, sun.g, sun.b, 1.0f));
+            ctx->DrawLine(D2D1::Point2F(c.x + u * 0.1f, c.y + u * 0.3f), D2D1::Point2F(c.x - u * 0.15f, c.y + u * 0.62f), m_brush.Get(), size * 0.09f, nullptr);
+            ctx->DrawLine(D2D1::Point2F(c.x - u * 0.15f, c.y + u * 0.62f), D2D1::Point2F(c.x + u * 0.1f, c.y + u * 0.62f), m_brush.Get(), size * 0.09f, nullptr);
+            ctx->DrawLine(D2D1::Point2F(c.x + u * 0.1f, c.y + u * 0.62f), D2D1::Point2F(c.x - u * 0.1f, c.y + u * 0.95f), m_brush.Get(), size * 0.09f, nullptr);
+            break;
+        case K::Night:
+            circle(c.x, c.y, u * 0.62f, Color{0.86f, 0.88f, 1.0f, 1.0f});
+            circle(c.x + u * 0.28f, c.y - u * 0.18f, u * 0.55f, Color{0.055f, 0.055f, 0.07f, 1.0f});
+            break;
+        case K::NightCloudy:
+            circle(c.x - u * 0.3f, c.y - u * 0.3f, u * 0.42f, Color{0.86f, 0.88f, 1.0f, 1.0f});
+            circle(c.x - u * 0.15f, c.y - u * 0.42f, u * 0.38f, Color{0.055f, 0.055f, 0.07f, 1.0f});
+            cloud(c.x + u * 0.12f, c.y + u * 0.2f, u * 0.78f, white);
+            break;
     }
 }
 
@@ -702,23 +818,44 @@ void AetherBar::Render() {
     ComputeTooltip();
     UpdateRegion();
 
+    const float s = m_dpi;
+    // glow silhouettes of every pill (recorded before BeginDraw)
+    auto gDock = m_dcomp->CreateSquircleGeometry(m_layout.dock, 24.0f * s);
+    auto gRight = m_dcomp->CreateSquircleGeometry(m_layout.right, 24.0f * s);
+    ComPtr<ID2D1PathGeometry> gWeather;
+    if (m_layout.weather.width > 1.0f) gWeather = m_dcomp->CreateSquircleGeometry(m_layout.weather, 24.0f * s);
+    auto silhouette = render::RecordSilhouette(m_dcomp.get(), {gDock.Get(), gRight.Get(), gWeather.Get()}, s, 0.75f);
+
     auto ctx = m_dcomp->BeginDraw();
     if (!ctx) return;
-    const float s = m_dpi;
     const float dockA = Clamp01(m_dockAppear.GetValue());
     ctx->SetTransform(D2D1::Matrix3x2F::Translation(0, (1.0f - dockA) * 30.0f * s));
+    render::DrawGlassGlow(ctx, silhouette.Get(), s, 0.75f);
 
     // ---- dock -----------------------------------------------------------------------------------
     DrawPill(ctx, m_layout.dock, 24.0f * s);
 
     const float sh = m_startHover.GetValue();
-    if (sh > 0.01f) {
-        if (auto g = m_dcomp->CreateSquircleGeometry(m_layout.start, 14.0f * s)) {
-            m_brush->SetColor(D2D1::ColorF(1, 1, 1, 0.09f * sh));
-            ctx->FillGeometry(g.Get(), m_brush.Get());
+    if (!render::glass::CurrentTheme().flat) {
+        const Rect& sr = m_layout.start;
+        for (int i = 3; i >= 1; --i) {   // violet glow
+            if (auto g = m_dcomp->CreateSquircleGeometry(Rect{sr.x - i * 2.0f * s, sr.y - i * 2.0f * s, sr.width + i * 4.0f * s, sr.height + i * 4.0f * s}, 15.0f * s + i * 2.0f * s)) {
+                m_brush->SetColor(D2D1::ColorF(ui::kPurple.r, ui::kPurple.g, ui::kPurple.b, (0.05f + 0.05f * sh) * (4 - i)));
+                ctx->FillGeometry(g.Get(), m_brush.Get());
+            }
+        }
+        if (auto g = m_dcomp->CreateSquircleGeometry(sr, 15.0f * s)) {
+            const bool bold = render::glass::CurrentTheme().bold;
+            const Color top = bold ? Color{ui::kPurpleLight.r * 0.92f, ui::kPurpleLight.g * 0.92f, ui::kPurpleLight.b, 0.97f} : Color{0.64f + 0.06f * sh, 0.46f + 0.06f * sh, 1.0f, 0.62f + 0.12f * sh};
+            const Color bot = bold ? Color{ui::kPurple.r, ui::kPurple.g, ui::kPurple.b, 0.95f} : Color{ui::kPurpleDeep.r, ui::kPurpleDeep.g, ui::kPurpleDeep.b, 0.40f + 0.12f * sh};
+            auto fill = m_dcomp->CreateLinearGradientBrush(top, bot,
+                                                           D2D1::Point2F(sr.x, sr.y), D2D1::Point2F(sr.Right(), sr.Bottom()));
+            if (fill) ctx->FillGeometry(g.Get(), fill.Get());
+            m_brush->SetColor(D2D1::ColorF(ui::kPurpleLight.r, ui::kPurpleLight.g, ui::kPurpleLight.b, 0.85f));
+            ctx->DrawGeometry(g.Get(), m_brush.Get(), 1.3f * s);
         }
     }
-    DrawStartLogo(ctx, m_layout.start.Center(), (20.0f + 2.0f * sh) * s, 0.95f);
+    DrawStartLogo(ctx, m_layout.start.Center(), (19.0f + 2.0f * sh) * s, 1.0f);
 
     for (size_t i = 0; i < m_entries.size(); ++i) {
         const Entry& e = *m_entries[i];
@@ -730,8 +867,15 @@ void AetherBar::Render() {
 
         if (act > 0.01f || hov > 0.01f) {
             if (auto g = m_dcomp->CreateSquircleGeometry(slot, 14.0f * s)) {
-                m_brush->SetColor(D2D1::ColorF(1, 1, 1, 0.07f * act + 0.08f * hov));
-                ctx->FillGeometry(g.Get(), m_brush.Get());
+                if (render::glass::CurrentTheme().bold) {
+                    m_brush->SetColor(D2D1::ColorF(ui::kPurple.r, ui::kPurple.g, ui::kPurple.b, 0.30f * act + 0.10f * hov));
+                    ctx->FillGeometry(g.Get(), m_brush.Get());
+                    m_brush->SetColor(D2D1::ColorF(ui::kPurpleLight.r, ui::kPurpleLight.g, ui::kPurpleLight.b, 0.55f * act));
+                    ctx->DrawGeometry(g.Get(), m_brush.Get(), 1.2f * s);
+                } else {
+                    m_brush->SetColor(D2D1::ColorF(1, 1, 1, 0.07f * act + 0.08f * hov));
+                    ctx->FillGeometry(g.Get(), m_brush.Get());
+                }
             }
         }
         const float scale = appear * (1.0f + 0.14f * hov);
@@ -744,7 +888,7 @@ void AetherBar::Render() {
         if (e.Running()) {
             const float dw = (4.0f + 12.0f * act) * s, dh = 3.6f * s;
             const float dy = slot.Bottom() - 3.0f * s;
-            m_brush->SetColor(D2D1::ColorF(act > 0.5f ? 0.38f : 1.0f, act > 0.5f ? 0.80f : 1.0f, 1.0f, (0.50f + 0.45f * act) * appear));
+            m_brush->SetColor(D2D1::ColorF(act > 0.5f ? ui::kPurpleLight.r : 1.0f, act > 0.5f ? ui::kPurpleLight.g : 1.0f, act > 0.5f ? ui::kPurpleLight.b : 1.0f, (0.50f + 0.45f * act) * appear));
             ctx->FillRoundedRectangle(D2D1::RoundedRect(RF(c.x - dw / 2, dy - dh, c.x + dw / 2, dy), dh / 2, dh / 2), m_brush.Get());
         }
     }
@@ -760,7 +904,10 @@ void AetherBar::Render() {
     };
     hoverBg(m_layout.chevron, Hit::Chevron);
     hoverBg(m_layout.quick, Hit::Quick);
+    hoverBg(m_layout.network, Hit::Network);
     hoverBg(m_layout.clock, Hit::Clock);
+    hoverBg(m_layout.bell, Hit::Bell);
+    hoverBg(m_layout.desktop, Hit::Desktop);
 
     if (m_primary) {
         DrawGlyph(ctx, kGlyphChevron, RF(m_layout.chevron), Color{1.0f, 1.0f, 1.0f, 0.85f});
@@ -783,19 +930,63 @@ void AetherBar::Render() {
         }
     }
 
+    if (m_primary) {
+        const Rect& nw = m_layout.network;
+        DrawGlyph(ctx, m_netKind == 2 ? ui::kGlyphEthernet : ui::kGlyphWifi, RF(nw), Color{1.0f, 1.0f, 1.0f, m_netKind == 0 ? 0.35f : 0.92f});
+        DrawGlyph(ctx, kGlyphBell, RF(m_layout.bell), Color{1.0f, 1.0f, 1.0f, 0.88f});
+        // notification badge (refreshed lazily)
+        {
+            static ULONGLONG lastPoll = 0; const ULONGLONG now = GetTickCount64();
+            if (now - lastPoll > 5000) { lastPoll = now; NotificationFeed::Instance().RequestRefresh(); }
+            if (NotificationFeed::Instance().Count() > 0) {
+                const Rect& bl = m_layout.bell;
+                ID2D1SolidColorBrush* dot = m_brush.Get();
+                dot->SetColor(D2D1::ColorF(1.0f, 0.36f, 0.45f, 1.0f));
+                ctx->FillEllipse(D2D1::Ellipse(D2D1::Point2F(bl.Center().x + 7 * s, bl.Center().y - 7 * s), 4.2f * s, 4.2f * s), dot);
+            }
+        }
+        // show-desktop: thin edge sliver that lights up on hover (like the classic Windows corner)
+        {
+            const Rect& dk = m_layout.desktop;
+            const bool hov = m_hoverKind == Hit::Desktop;
+            ID2D1SolidColorBrush* b = m_brush.Get();
+            b->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, hov ? 0.20f : 0.0f));
+            if (hov) ctx->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(dk.x + 4 * s, dk.y, dk.Right() - 2 * s, dk.Bottom()), 6 * s, 6 * s), b);
+            b->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, hov ? 0.85f : 0.32f));
+            ctx->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(dk.Right() - 6 * s, dk.y + 6 * s, dk.Right() - 4 * s, dk.Bottom() - 6 * s), 1 * s, 1 * s), b);
+        }
+    }
+
     SYSTEMTIME st; GetLocalTime(&st);
     wchar_t tm[16]; swprintf_s(tm, L"%02d:%02d", st.wHour, st.wMinute);
-    wchar_t date[48];
-    GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, DATE_SHORTDATE, &st, nullptr, date, ARRAYSIZE(date), nullptr);
+    const std::wstring date = i18n::ShortDate(st);
     const Rect& ck = m_layout.clock;
     DrawText(ctx, tm, m_fontTime.Get(), RF(ck.x, ck.y + 2 * s, ck.Right(), ck.y + 24 * s), Color{1.0f, 1.0f, 1.0f, 0.96f});
     DrawText(ctx, date, m_fontDate.Get(), RF(ck.x, ck.y + 22 * s, ck.Right(), ck.Bottom() - 2 * s), Color{1.0f, 1.0f, 1.0f, 0.55f});
 
-    // show-desktop sliver
-    {
-        const Rect& d = m_layout.desktop;
-        m_brush->SetColor(D2D1::ColorF(1, 1, 1, m_hoverKind == Hit::Desktop ? 0.30f : 0.12f));
-        ctx->FillRoundedRectangle(D2D1::RoundedRect(RF(d.x + 4 * s, d.y, d.Right() - 2 * s, d.Bottom()), 2 * s, 2 * s), m_brush.Get());
+    // ---- weather pill (bottom-left) -----------------------------------------------------------------
+    if (m_layout.weather.width > 1.0f) {
+        const Rect& wp = m_layout.weather;
+        DrawPill(ctx, wp, 24.0f * s);
+        if (m_hoverKind == Hit::Weather) {
+            if (auto g = m_dcomp->CreateSquircleGeometry(Rect{wp.x + 5 * s, wp.y + 5 * s, wp.width - 10 * s, wp.height - 10 * s}, 18.0f * s)) {
+                m_brush->SetColor(D2D1::ColorF(1, 1, 1, 0.08f));
+                ctx->FillGeometry(g.Get(), m_brush.Get());
+            }
+        }
+        if (m_weatherValid) {
+            DrawWeatherIcon(ctx, Vec2{wp.x + 32.0f * s, wp.Center().y}, 28.0f * s, m_weatherKind);
+            wchar_t deg[16]; swprintf_s(deg, L"%d\u00B0C", m_weatherTemp);
+            m_fontTime->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            m_fontDate->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            DrawText(ctx, deg, m_fontTime.Get(), RF(wp.x + 62 * s, wp.y + 4 * s, wp.Right() - 8 * s, wp.y + wp.height * 0.52f), Color{1.0f, 1.0f, 1.0f, 0.96f});
+            DrawText(ctx, m_weatherText, m_fontDate.Get(), RF(wp.x + 62 * s, wp.y + wp.height * 0.48f, wp.Right() - 8 * s, wp.Bottom() - 4 * s), Color{1.0f, 1.0f, 1.0f, 0.62f});
+            m_fontTime->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            m_fontDate->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        } else {
+            DrawWeatherIcon(ctx, Vec2{wp.x + 34.0f * s, wp.Center().y}, 30.0f * s, static_cast<int>(WeatherService::Kind::Cloudy));
+            DrawText(ctx, i18n::Pick(L"Weather", L"Hava durumu"), m_fontDate.Get(), RF(wp.x + 54 * s, wp.y, wp.Right() - 8 * s, wp.Bottom()), Color{1.0f, 1.0f, 1.0f, 0.6f});
+        }
     }
 
     // ---- tooltip ------------------------------------------------------------------------------------
@@ -828,8 +1019,11 @@ AetherBar::Hit AetherBar::HitTest(const Vec2& pt, int& index) const {
     }
     if (m_layout.chevron.width > 0 && m_layout.chevron.Contains(p)) return Hit::Chevron;
     if (m_layout.quick.width > 0 && m_layout.quick.Contains(p)) return Hit::Quick;
+    if (m_layout.network.width > 0 && m_layout.network.Contains(p)) return Hit::Network;
     if (m_layout.clock.Contains(p)) return Hit::Clock;
-    if (m_layout.desktop.Contains(p)) return Hit::Desktop;
+    if (m_layout.bell.width > 0 && m_layout.bell.Contains(p)) return Hit::Bell;
+    if (m_layout.weather.width > 0 && m_layout.weather.Contains(p)) return Hit::Weather;
+    if (m_layout.desktop.width > 0 && m_layout.desktop.Contains(p)) return Hit::Desktop;
     if (m_layout.right.Contains(p)) return Hit::Right;
     if (m_layout.dock.Contains(p)) return Hit::Dock;
     return Hit::None;
@@ -881,13 +1075,11 @@ void AetherBar::ShowItemMenu(int index) {
     if (index < 0 || index >= static_cast<int>(m_entries.size())) return;
     Entry& e = *m_entries[index];
     POINT pt; GetCursorPos(&pt);
-    HMENU menu = CreatePopupMenu();
-    AppendMenuW(menu, MF_STRING, 1, L"Open new window");
-    if (!e.exePath.empty()) AppendMenuW(menu, MF_STRING, 2, e.pinned ? L"Unpin from bar" : L"Pin to bar");
-    if (e.Running()) AppendMenuW(menu, MF_STRING, 3, e.windows.size() > 1 ? L"Close all windows" : L"Close window");
-    SetForegroundWindow(m_hwnd);
-    const int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_BOTTOMALIGN, pt.x, pt.y, 0, m_hwnd, nullptr);
-    DestroyMenu(menu);
+    std::vector<aether::ui::MenuEntry> items;
+    items.push_back(aether::ui::MenuItem(1, i18n::Pick(L"Open new window", L"Yeni pencere aç"), 0xE8A7));
+    if (!e.exePath.empty()) items.push_back(aether::ui::MenuItem(2, e.pinned ? i18n::Pick(L"Unpin from bar", L"Çubuktan kaldır") : i18n::Pick(L"Pin to bar", L"Çubuğa sabitle"), 0xE718));
+    if (e.Running()) items.push_back(aether::ui::MenuItem(3, e.windows.size() > 1 ? i18n::Pick(L"Close all windows", L"Tüm pencereleri kapat") : i18n::Pick(L"Close window", L"Pencereyi kapat"), 0xE711, true));
+    const int cmd = aether::ui::ShowContextMenu(items, pt, true);
     PinStore& store = PinStore::I();
     if (cmd == 1 && !e.exePath.empty()) ShellExecuteW(nullptr, L"open", e.exePath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     else if (cmd == 2) {
@@ -898,20 +1090,27 @@ void AetherBar::ShowItemMenu(int index) {
     else if (cmd == 3) for (HWND w : e.windows) PostMessageW(w, WM_CLOSE, 0, 0);
 }
 
+void AetherBar::ToggleFlyout(Flyout* panel, const core::Rect& anchor) {
+    if (!panel) return;
+    if (panel->IsOpen()) { panel->Hide(); return; }
+    if (panel->JustDismissed()) return;   // the same click just closed it
+    for (Flyout* f : {m_quick, m_calendar, m_tray, m_notify, m_weather, m_net}) if (f && f != panel) f->Hide();
+    POINT p = {static_cast<LONG>(anchor.Center().x), 0};
+    ClientToScreen(m_hwnd, &p);
+    panel->Show(m_mon, m_reservedPx, static_cast<float>(p.x));
+}
+
 void AetherBar::ShowBarMenu() {
     POINT pt; GetCursorPos(&pt);
-    HMENU menu = CreatePopupMenu();
-    AppendMenuW(menu, MF_STRING, 1, L"Task Manager");
-    AppendMenuW(menu, MF_STRING, 2, L"Windows Settings");
-    AppendMenuW(menu, MF_STRING, 3, L"System tray (Win+B)");
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, 9, L"Exit Aether Bar (restore Windows taskbar)");
-    SetForegroundWindow(m_hwnd);
-    const int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_BOTTOMALIGN, pt.x, pt.y, 0, m_hwnd, nullptr);
-    DestroyMenu(menu);
+    const int cmd = aether::ui::ShowContextMenu({
+        aether::ui::MenuItem(1, i18n::Pick(L"Task Manager", L"Görev Yöneticisi"), 0xE9D9),
+        aether::ui::MenuItem(2, i18n::Pick(L"Windows Settings", L"Windows Ayarları"), 0xE713),
+        aether::ui::MenuItem(3, i18n::Pick(L"System tray", L"Sistem tepsisi"), 0xE70E),
+        aether::ui::MenuSeparator(),
+        aether::ui::MenuItem(9, i18n::Pick(L"Exit Aether Bar", L"Aether Bar'dan çık"), 0xE7E8, true, i18n::Pick(L"restores the Windows taskbar", L"Windows görev çubuğunu geri getirir"))}, pt, true);
     if (cmd == 1) ShellExecuteW(nullptr, L"open", L"taskmgr.exe", nullptr, nullptr, SW_SHOWNORMAL);
     else if (cmd == 2) ShellExecuteW(nullptr, L"open", L"ms-settings:", nullptr, nullptr, SW_SHOWNORMAL);
-    else if (cmd == 3) SendWinCombo('B');
+    else if (cmd == 3) OpenTray();
     else if (cmd == 9) PostQuitMessage(0);
 }
 
@@ -942,7 +1141,7 @@ LRESULT AetherBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_SETCURSOR:
             if (LOWORD(lp) == HTCLIENT) {
                 const bool hand = m_hoverKind != Hit::None && m_hoverKind != Hit::Dock && m_hoverKind != Hit::Right;
-                SetCursor(LoadCursorW(nullptr, hand ? IDC_HAND : IDC_ARROW));
+                ui::ApplyCursor(hand);
                 return TRUE;
             }
             break;
@@ -964,7 +1163,7 @@ LRESULT AetherBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             ScreenToClient(hwnd, &pt);
             int idx;
             const Hit h = HitTest(Vec2{static_cast<float>(pt.x), static_cast<float>(pt.y)}, idx);
-            if (m_primary && (h == Hit::Quick || h == Hit::Chevron || h == Hit::Clock || h == Hit::Right)) {
+            if (m_primary && (h == Hit::Quick || h == Hit::Chevron || h == Hit::Network || h == Hit::Clock || h == Hit::Bell || h == Hit::Right)) {
                 AdjustVolume(static_cast<float>(GET_WHEEL_DELTA_WPARAM(wp)) / WHEEL_DELTA * 0.03f);
             }
             return 0;
@@ -975,9 +1174,12 @@ LRESULT AetherBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             switch (h) {
                 case Hit::Start:   if (m_start) m_start->Toggle(m_mon, m_reservedPx); break;
                 case Hit::Item:    OnItemClick(*m_entries[idx]); break;
-                case Hit::Chevron: SendWinCombo('B'); break;   // reveals the real notification area
-                case Hit::Quick:   SendWinCombo('A'); break;   // quick settings (network, volume, brightness ...)
-                case Hit::Clock:   SendWinCombo('N'); break;   // notification centre + calendar
+                case Hit::Chevron: ToggleFlyout(m_tray, m_layout.chevron); break;      // Aether tray
+                case Hit::Quick:   ToggleFlyout(m_quick, m_layout.quick); break;       // quick settings
+                case Hit::Network: ToggleFlyout(m_net, m_layout.network); break;       // own network centre
+                case Hit::Clock:   ToggleFlyout(m_calendar, m_layout.clock); break;    // clock + calendar
+                case Hit::Bell:    ToggleFlyout(m_notify, m_layout.bell); break;   // Aether notification centre
+                case Hit::Weather: ToggleFlyout(m_weather, m_layout.weather); break;     // animated weather panel
                 case Hit::Desktop: SendWinCombo('D'); break;
                 default: break;
             }
@@ -1008,6 +1210,7 @@ LRESULT AetherBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 bool AetherBar::Frame(float dt) {
+    render::glass::SyncTheme();
     if (!m_hwnd) return false;
     Tick(dt);
     const bool animating = IsAnimating();

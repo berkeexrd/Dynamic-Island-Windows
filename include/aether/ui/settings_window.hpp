@@ -38,15 +38,15 @@ private:
 
     HWND m_hwnd{nullptr};
     bool m_visible{false};
-    uint32_t m_width{960};
-    uint32_t m_height{640};
+    uint32_t m_width{1120};
+    uint32_t m_height{760};
 
     ComPtr<ID3D11Device> m_pd3dDevice;
     ComPtr<ID3D11DeviceContext> m_pd3dDeviceContext;
     ComPtr<IDXGISwapChain> m_pSwapChain;
     ComPtr<ID3D11RenderTargetView> m_mainRenderTargetView;
 
-    SettingsTab m_activeTab{SettingsTab::DynamicIsland};
+    SettingsTab m_activeTab{SettingsTab::General};
 };
 
 } // namespace aether::ui
