@@ -9,6 +9,7 @@
 #include "aether/core/types.hpp"
 #include "aether/animation/spring.hpp"
 #include "aether/render/dcomp_layer.hpp"
+#include "aether/render/backdrop.hpp"
 
 namespace aether::bar {
 
@@ -67,10 +68,10 @@ public:
 
 private:
     static constexpr UINT WM_APPBAR = WM_USER + 1;
-    enum class Hit { None, Start, Item, Chevron, Quick, Network, Clock, Bell, Weather, Desktop, Right, Dock };
+    enum class Hit { None, Start, Search, Item, Chevron, Quick, Network, Clock, Bell, Weather, Desktop, Right, Dock };
 
     struct LayoutInfo {
-        core::Rect dock, right, start, chevron, quick, network, clock, bell, weather, desktop;
+        core::Rect dock, right, start, search, chevron, quick, network, clock, bell, weather, desktop;
         std::vector<core::Rect> items;
     };
 
@@ -81,6 +82,7 @@ private:
     void UnregisterAppBar();
     void SetAppBarPos();
     void PositionWindow();
+    void RefreshBackdrop(bool hideWindowFirst);
 
     void RefreshWindows();
     ComPtr<ID2D1Bitmap1> LoadIcon(const Entry& e);
@@ -121,6 +123,8 @@ private:
     float m_dpi{1.0f};
     int m_windowW{0}, m_windowH{0}, m_reservedPx{0};
     bool m_visible{true};
+    render::Backdrop m_backdrop;               // blurred wallpaper strip behind the pills
+    float m_hoverAmt[16]{};                    // eased hover amount per Hit kind (system pill highlights)
 
     std::vector<std::unique_ptr<Entry>> m_entries;
     unsigned m_pinVersion{0};

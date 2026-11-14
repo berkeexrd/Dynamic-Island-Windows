@@ -106,7 +106,7 @@ public:
     void ToggleStart() {
         POINT pt; GetCursorPos(&pt);
         HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
-        int reserved = static_cast<int>(74.0f * aether::core::MonitorScale(mon));
+        int reserved = static_cast<int>(82.0f * aether::core::MonitorScale(mon));
         for (auto& b : m_bars) if (b->Monitor() == mon) reserved = b->ReservedPx();
         m_start.Toggle(mon, reserved);
     }

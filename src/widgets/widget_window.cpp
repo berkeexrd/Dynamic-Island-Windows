@@ -4,6 +4,7 @@
 #include "aether/core/log.hpp"
 #include "aether/core/i18n.hpp"
 #include "aether/render/glass.hpp"
+#include "aether/render/context_menu.hpp"
 #include "aether/media/media_service.hpp"
 #include "aether/bar/weather.hpp"
 #include "stb_image.h"
@@ -12,6 +13,7 @@
 #include <ctime>
 #include <cmath>
 #include <algorithm>
+#include <atomic>
 #include <vector>
 #include <dwmapi.h>
 
@@ -28,10 +30,14 @@ static const wchar_t* WIDGET_CLASS_NAME = L"AetherDesktopWidgetClass";
 
 namespace {
 // Card sizes from the mockup (logical px) and the transparent margin that holds the glow.
-constexpr float kPad = 24.0f;
+// The margin must be wider than the glow reaches (sigma 13-16 -> ~3 sigma), otherwise the halo is cut off at the window edge.
+constexpr float kPad = 36.0f;
 constexpr float kCardW = 264.0f;
 constexpr float kCardH[6] = {138.0f, 112.0f, 92.0f, 150.0f, 178.0f, 96.0f};   // performance, network, clock, storage, weather, now playing
 constexpr float kRadius = 20.0f;
+// The clock has no card in the concept: big thin digits, date above, weather below.
+constexpr float kClockW = 340.0f;
+constexpr float kClockH = 186.0f;
 
 int Slot(WidgetType t) {
     switch (t) {
@@ -43,11 +49,18 @@ int Slot(WidgetType t) {
         default:                        return 2;
     }
 }
+float CardW(WidgetType t) { return t == WidgetType::ClockCalendar ? kClockW : kCardW; }
+float CardH(WidgetType t) { return t == WidgetType::ClockCalendar ? kClockH : kCardH[Slot(t)]; }
+
+// Widgets redraw once a second (that is how often their data changes). After a click on the player buttons, a theme
+// change or a show/hide they redraw at 5 Hz for a moment so the UI reacts immediately.
+std::atomic<ULONGLONG> g_fastUntil{0};
+void RedrawSoon(ULONGLONG ms = 1500) { g_fastUntil = GetTickCount64() + ms; }
 } // namespace
 
 DesktopWidgetWindow::DesktopWidgetWindow(WidgetType type) : m_type(type) {
-    m_width = static_cast<uint32_t>(kCardW + kPad * 2);
-    m_height = static_cast<uint32_t>(kCardH[Slot(type)] + kPad * 2);
+    m_width = static_cast<uint32_t>(CardW(type) + kPad * 2);
+    m_height = static_cast<uint32_t>(CardH(type) + kPad * 2);
 }
 
 DesktopWidgetWindow::~DesktopWidgetWindow() {
@@ -77,8 +90,10 @@ namespace {
 core::Color& kViolet = render::glass::kViolet;
 core::Color& kVioletLight = render::glass::kVioletLight;
 core::Color& kVioletDeep = render::glass::kVioletDeep;
-constexpr core::Color kText{0.97f, 0.96f, 1.0f, 1.0f};
-constexpr core::Color kMuted{0.70f, 0.68f, 0.80f, 1.0f};
+core::Color& kAccent2 = render::glass::kAccent2;
+core::Color& kAccent2Light = render::glass::kAccent2Light;
+core::Color& kText = render::glass::kText;      // theme tinted, see glass::SetTheme
+core::Color& kMuted = render::glass::kMuted;
 
 core::Color A(const core::Color& c, float a) { return core::Color{c.r, c.g, c.b, a}; }
 
@@ -97,7 +112,11 @@ bool DesktopWidgetWindow::Create() {
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     RegisterClassExW(&wc);
 
-    m_dpiScale = std::max(1.0f, static_cast<float>(GetDpiForSystem()) / 96.0f);
+    const float sysScale = std::max(1.0f, static_cast<float>(GetDpiForSystem()) / 96.0f);
+    // The concept was drawn on a 1672 px wide canvas. On a wider screen the same pixel sizes look smaller than designed,
+    // so the widgets grow with the screen width (1.0x up to 1.5x; a 1920 px wide screen gets 1.15x).
+    const float designScale = std::clamp(static_cast<float>(GetSystemMetrics(SM_CXSCREEN)) / (1672.0f * sysScale), 1.0f, 1.5f);
+    m_dpiScale = sysScale * designScale;
     const int pxW = static_cast<int>(m_width * m_dpiScale), pxH = static_cast<int>(m_height * m_dpiScale);
 
     const auto& cfg = config::ConfigManager::Instance().Get().widgets;
@@ -113,18 +132,21 @@ bool DesktopWidgetWindow::Create() {
 
     int posX = static_cast<int>(saved->x), posY = static_cast<int>(saved->y);
     if (IsUnplaced(*saved)) {
-        // stacked on the right edge like the mockup: performance, network, clock
+        // like the mockup: performance, network, storage and the player stacked on the right edge,
+        // weather bottom-left, the card-less clock left of the centre
         RECT work{};
         SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+        static const WidgetType kStack[] = {WidgetType::SystemMonitor, WidgetType::NetworkMeter, WidgetType::Storage, WidgetType::NowPlaying};
         float cardTop = 100.0f;
-        const int slot = Slot(m_type);
-        for (int i = 0; i < std::min(slot, 4); ++i) cardTop += kCardH[i] + 14.0f;   // weather sits bottom-left instead
-        if (m_type == WidgetType::NowPlaying) cardTop = 100.0f + kCardH[0] + kCardH[1] + kCardH[2] + kCardH[3] + 4 * 14.0f;
-        posX = work.right - static_cast<int>((kCardW + kPad + 16.0f) * m_dpiScale);
+        for (WidgetType o : kStack) { if (o == m_type) break; cardTop += CardH(o) + 14.0f; }
+        posX = work.right - static_cast<int>((CardW(m_type) + kPad + 16.0f) * m_dpiScale);
         posY = work.top + static_cast<int>((cardTop - kPad) * m_dpiScale);
         if (m_type == WidgetType::Weather) {
-            posX = work.left + static_cast<int>(8.0f * m_dpiScale);
-            posY = work.bottom - pxH - static_cast<int>(70.0f * m_dpiScale);
+            posX = work.left + static_cast<int>((20.0f - kPad) * m_dpiScale);
+            posY = work.bottom - pxH - static_cast<int>((94.0f - kPad) * m_dpiScale);   // card bottom stays 94 px above the work area
+        } else if (m_type == WidgetType::ClockCalendar) {
+            posX = work.left + static_cast<int>((work.right - work.left) * 0.17f) - static_cast<int>(kPad * m_dpiScale);
+            posY = work.top + static_cast<int>((work.bottom - work.top) * 0.22f) - static_cast<int>(kPad * m_dpiScale);
         }
     }
 
@@ -169,6 +191,10 @@ bool DesktopWidgetWindow::Create() {
         make(m_fontCenter, display, DWRITE_FONT_WEIGHT_BOLD,      13.5f, DWRITE_TEXT_ALIGNMENT_CENTER);    // ring value
         make(m_fontTiny,   text,    DWRITE_FONT_WEIGHT_SEMI_BOLD,  8.5f, DWRITE_TEXT_ALIGNMENT_CENTER);    // ring label
         make(m_fontIcon,   icons,   DWRITE_FONT_WEIGHT_NORMAL,    26.0f, DWRITE_TEXT_ALIGNMENT_CENTER);
+        make(m_fontClock,  display, DWRITE_FONT_WEIGHT_LIGHT,    112.0f, DWRITE_TEXT_ALIGNMENT_CENTER);    // card-less clock
+        make(m_fontDate,   text,    DWRITE_FONT_WEIGHT_NORMAL,    19.0f, DWRITE_TEXT_ALIGNMENT_CENTER);    // date above the clock
+        make(m_fontInfo,   text,    DWRITE_FONT_WEIGHT_NORMAL,    16.5f, DWRITE_TEXT_ALIGNMENT_LEADING);   // weather line below it
+        make(m_fontTinyR,  text,    DWRITE_FONT_WEIGHT_NORMAL,     9.5f, DWRITE_TEXT_ALIGNMENT_TRAILING);  // storage usage
     }
 
     // Place near desktop level (bottom of Z-order)
@@ -213,10 +239,9 @@ void DesktopWidgetWindow::DrawRing(ID2D1DeviceContext* ctx, float cx, float cy, 
     m_brush->SetColor(D2D1::ColorF(1, 1, 1, 0.10f));
     ctx->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), rr, rr), m_brush.Get(), thickness);
 
-    auto grad = m_dcomp->CreateLinearGradientBrush(kVioletLight, kViolet, D2D1::Point2F(cx, cy - radius), D2D1::Point2F(cx, cy + radius));
     auto stroke = m_dcomp->CreateRoundedStrokeStyle();
     auto fac = m_dcomp->GetD2DFactory();
-    if (grad && fac && frac > 0.004f) {
+    if (fac && frac > 0.004f) {
         ComPtr<ID2D1Geometry> arcGeo;
         if (frac >= 0.995f) {
             ComPtr<ID2D1EllipseGeometry> e;
@@ -236,10 +261,26 @@ void DesktopWidgetWindow::DrawRing(ID2D1DeviceContext* ctx, float cx, float cy, 
         }
         if (arcGeo) {
             for (int i = 3; i >= 1; --i) {   // glow under the arc
-                m_brush->SetColor(D2D1::ColorF(kViolet.r, kViolet.g, kViolet.b, 0.10f));
+                m_brush->SetColor(D2D1::ColorF(kAccent2.r, kAccent2.g, kAccent2.b, 0.09f));
                 ctx->DrawGeometry(arcGeo.Get(), m_brush.Get(), thickness + i * 3.0f, stroke.Get());
             }
-            ctx->DrawGeometry(arcGeo.Get(), grad.Get(), thickness, stroke.Get());
+            // The concept's arc fades in from its start (dim) to a full, vivid colour at the head. Direct2D has no
+            // conic gradient, so a linear one runs along the chord from the start to the head (at most half a turn).
+            const float a0 = -1.5707963f, head = a0 + std::min(frac, 0.5f) * 6.2831853f;
+            const D2D1_POINT_2F p0 = D2D1::Point2F(cx + std::cos(a0) * rr, cy + std::sin(a0) * rr);
+            const D2D1_POINT_2F p1 = D2D1::Point2F(cx + std::cos(head) * rr, cy + std::sin(head) * rr);
+            const float chord = std::hypot(p1.x - p0.x, p1.y - p0.y);
+            ComPtr<ID2D1LinearGradientBrush> grad;
+            if (chord > 6.0f)
+                grad = m_dcomp->CreateLinearGradientBrush({{0.0f, A(kAccent2, 0.30f)},
+                                                           {0.55f, A(kAccent2, 0.90f)},
+                                                           {1.0f, core::Color::Lerp(kAccent2, kAccent2Light, 0.20f)}}, p0, p1);
+            if (grad) {
+                ctx->DrawGeometry(arcGeo.Get(), grad.Get(), thickness, stroke.Get());
+            } else {   // very short arc: a solid colour reads better than a squeezed gradient
+                m_brush->SetColor(D2D1::ColorF(kAccent2.r, kAccent2.g, kAccent2.b, 0.95f));
+                ctx->DrawGeometry(arcGeo.Get(), m_brush.Get(), thickness, stroke.Get());
+            }
         }
     }
     DrawText(ctx, value, m_fontCenter.Get(), D2D1::RectF(cx - radius, cy - 13.0f, cx + radius, cy + 4.0f), kText);
@@ -286,14 +327,21 @@ void DesktopWidgetWindow::DrawSpark(ID2D1DeviceContext* ctx, const std::vector<f
 void DesktopWidgetWindow::Render() {
     if (!m_dcomp || !m_brush || !m_shownNow) return;
     const float s = m_dpiScale;
-    const core::Rect card{kPad, kPad, kCardW, kCardH[Slot(m_type)]};
-    auto body = m_dcomp->CreateSquircleGeometry(card, kRadius);
-    auto silhouette = render::RecordSilhouette(m_dcomp.get(), {body.Get()}, 1.0f, 0.8f);   // logical px; drawn under the DPI transform
+    const bool cardless = m_type == WidgetType::ClockCalendar;   // the concept's clock floats on the wallpaper
+    const core::Rect card{kPad, kPad, CardW(m_type), CardH(m_type)};
+    ComPtr<ID2D1PathGeometry> body;
+    ComPtr<ID2D1CommandList> silhouette;
+    if (!cardless) {
+        body = m_dcomp->CreateSquircleGeometry(card, kRadius);
+        silhouette = render::RecordSilhouette(m_dcomp.get(), {body.Get()}, 1.0f, 0.8f);   // logical px; drawn under the DPI transform
+    }
     auto ctx = m_dcomp->BeginDraw();
     if (!ctx) return;
     ctx->SetTransform(D2D1::Matrix3x2F::Scale(s, s));
-    render::DrawGlassGlow(ctx, silhouette.Get(), 1.0f, 0.8f);
-    if (body) render::DrawGlassBody(ctx, m_dcomp.get(), m_brush.Get(), body.Get(), card, 1.0f, 0.9f);
+    if (!cardless) {
+        render::DrawGlassGlow(ctx, silhouette.Get(), 1.0f, 0.8f);
+        if (body) render::DrawGlassBody(ctx, m_dcomp.get(), m_brush.Get(), body.Get(), card, 1.0f, 0.9f);
+    }
 
     ctx->SetTransform(D2D1::Matrix3x2F::Translation(kPad, kPad) * D2D1::Matrix3x2F::Scale(s, s));   // card coordinates
     switch (m_type) {
@@ -313,7 +361,7 @@ void DesktopWidgetWindow::RenderSystemMonitor(ID2D1DeviceContext* ctx) {
     const auto m = system::MetricsCollector::Instance().GetMetrics();
     DrawText(ctx, i18n::Pick(L"System Performance", L"Sistem Performansı"), m_fontTitle.Get(), D2D1::RectF(18.0f, 10.0f, 246.0f, 34.0f), kText);
 
-    const float cy = 84.0f, rad = 30.0f, th = 4.5f;
+    const float cy = 84.0f, rad = 30.0f, th = 5.0f;
     wchar_t buf[32];
     swprintf_s(buf, L"%d%%", static_cast<int>(m.cpuUsagePercent + 0.5f));
     DrawRing(ctx, 50.0f, cy, rad, th, m.cpuUsagePercent / 100.0f, buf, L"CPU");
@@ -323,21 +371,63 @@ void DesktopWidgetWindow::RenderSystemMonitor(ID2D1DeviceContext* ctx) {
     DrawRing(ctx, 214.0f, cy, rad, th, m.gpuUsagePercent / 100.0f, buf, L"GPU");
 }
 
+namespace {
+void MiniWeatherIcon(ID2D1DeviceContext* c, ID2D1SolidColorBrush* b, float cx, float cy, float sz, bar::WeatherService::Kind k, float t);   // defined with the weather card below
+}
+
+// ---- Clock: no card, like the concept. Date on top (weekday in the accent colour), big thin digits with a
+// light -> accent gradient, weather line below, faint corner brackets around it all. ------------------------------
 void DesktopWidgetWindow::RenderClockCalendar(ID2D1DeviceContext* ctx) {
+    constexpr float W = kClockW, H = kClockH;
     SYSTEMTIME st; GetLocalTime(&st);
-    wchar_t timeBuf[32];
-    swprintf_s(timeBuf, L"%02d:%02d:%02d", st.wHour, st.wMinute, st.wSecond);
-    if (m_hasIconFont && m_fontIcon) {   // violet calendar glyph
-        wchar_t g[2] = {0xE787, 0};
-        const D2D1_RECT_F r = D2D1::RectF(14.0f, 26.0f, 50.0f, 66.0f);
-        m_brush->SetColor(D2D1::ColorF(kViolet.r, kViolet.g, kViolet.b, 0.35f));
-        const D2D1_RECT_F rg = D2D1::RectF(r.left, r.top + 1.0f, r.right, r.bottom + 1.0f);
-        ctx->DrawText(g, 1, m_fontIcon.Get(), &rg, m_brush.Get());
-        m_brush->SetColor(D2D1::ColorF(kVioletLight.r, kVioletLight.g, kVioletLight.b, 1.0f));
-        ctx->DrawText(g, 1, m_fontIcon.Get(), &r, m_brush.Get());
+    wchar_t timeBuf[16];
+    swprintf_s(timeBuf, L"%02d:%02d", st.wHour, st.wMinute);
+    auto dw = m_dcomp->GetDWriteFactory();
+
+    {   // corner brackets
+        m_brush->SetColor(D2D1::ColorF(kAccent2.r, kAccent2.g, kAccent2.b, 0.32f));
+        const float l = 14.0f, x0 = 6.0f, y0 = 6.0f, x1 = W - 6.0f, y1 = H - 6.0f, w = 1.2f;
+        auto ln = [&](float ax, float ay, float bx, float by) { ctx->DrawLine(D2D1::Point2F(ax, ay), D2D1::Point2F(bx, by), m_brush.Get(), w); };
+        ln(x0, y0 + l, x0, y0); ln(x0, y0, x0 + l, y0);
+        ln(x1 - l, y0, x1, y0); ln(x1, y0, x1, y0 + l);
+        ln(x0, y1 - l, x0, y1); ln(x0, y1, x0 + l, y1);
+        ln(x1 - l, y1, x1, y1); ln(x1, y1, x1, y1 - l);
     }
-    DrawText(ctx, timeBuf, m_fontLarge.Get(), D2D1::RectF(62.0f, 14.0f, 256.0f, 50.0f), kText);
-    DrawText(ctx, i18n::LongDate(st), m_fontSmall.Get(), D2D1::RectF(63.0f, 50.0f, 256.0f, 72.0f), core::Color{0.90f, 0.89f, 0.96f, 1.0f});
+
+    // date: "Cuma, 13 Kasım" - the weekday part tinted
+    const std::wstring date = i18n::LongDate(st);
+    if (dw && m_fontDate) {
+        ComPtr<IDWriteTextLayout> tl;
+        if (SUCCEEDED(dw->CreateTextLayout(date.c_str(), static_cast<UINT32>(date.size()), m_fontDate.Get(), W, 28.0f, &tl)) && tl) {
+            const size_t comma = date.find(L',');
+            auto accent = m_dcomp->CreateSolidBrush(kAccent2Light);
+            if (accent && comma != std::wstring::npos) tl->SetDrawingEffect(accent.Get(), DWRITE_TEXT_RANGE{0, static_cast<UINT32>(comma + 1)});
+            m_brush->SetColor(D2D1::ColorF(0.96f, 0.95f, 0.99f, 1.0f));
+            ctx->DrawTextLayout(D2D1::Point2F(0.0f, 12.0f), tl.Get(), m_brush.Get());
+        }
+    }
+
+    // digits: gradient fill (bottom-left light -> top-right accent, like the concept)
+    const D2D1_RECT_F tr = D2D1::RectF(0.0f, 34.0f, W, 34.0f + 124.0f);
+    if (auto g = m_dcomp->CreateLinearGradientBrush({{0.0f, core::Color{0.97f, 0.95f, 1.0f, 1.0f}}, {1.0f, kAccent2Light}},
+                                                    D2D1::Point2F(W * 0.30f, tr.bottom), D2D1::Point2F(W * 0.72f, tr.top)))
+        ctx->DrawText(timeBuf, static_cast<UINT32>(wcslen(timeBuf)), m_fontClock.Get(), &tr, g.Get());
+
+    // weather line: [icon] 12°C  •  Parçalı Bulutlu, centred
+    const bar::WeatherNow w = bar::WeatherService::Instance().Get();
+    if (w.valid && dw && m_fontInfo) {
+        wchar_t tb[16]; swprintf_s(tb, L"%d°C", w.tempC);
+        const std::wstring info = std::wstring(tb) + L"  •  " + bar::WeatherService::Describe(w.code, w.day);
+        ComPtr<IDWriteTextLayout> tl;
+        if (SUCCEEDED(dw->CreateTextLayout(info.c_str(), static_cast<UINT32>(info.size()), m_fontInfo.Get(), 400.0f, 24.0f, &tl)) && tl) {
+            DWRITE_TEXT_METRICS tm{}; tl->GetMetrics(&tm);
+            const float iconW = 26.0f, total = iconW + 8.0f + tm.widthIncludingTrailingWhitespace;
+            const float x0 = (W - total) * 0.5f, y0 = H - 34.0f;
+            MiniWeatherIcon(ctx, m_brush.Get(), x0 + iconW * 0.5f, y0 + 12.0f, 24.0f, bar::WeatherService::KindOf(w.code, w.day), 0.0f);
+            m_brush->SetColor(D2D1::ColorF(0.93f, 0.92f, 0.98f, 1.0f));
+            ctx->DrawTextLayout(D2D1::Point2F(x0 + iconW + 8.0f, y0), tl.Get(), m_brush.Get());
+        }
+    }
 }
 
 void DesktopWidgetWindow::RenderNetworkMeter(ID2D1DeviceContext* ctx) {
@@ -350,7 +440,7 @@ void DesktopWidgetWindow::RenderNetworkMeter(ID2D1DeviceContext* ctx) {
         return std::wstring(b);
     };
     // "↓ 0.01 MB/s"  left,  "↑ 0.00 MB/s"  right
-    DrawText(ctx, L"↓", m_fontMedium.Get(), D2D1::RectF(18.0f, 40.0f, 32.0f, 60.0f), kVioletLight);
+    DrawText(ctx, L"↓", m_fontMedium.Get(), D2D1::RectF(18.0f, 40.0f, 32.0f, 60.0f), kAccent2Light);
     DrawText(ctx, rate(m.netDownloadBytesPerSec), m_fontMedium.Get(), D2D1::RectF(33.0f, 40.0f, 140.0f, 60.0f), kText);
     const std::wstring up = rate(m.netUploadBytesPerSec);
     float upW = 70.0f;
@@ -361,15 +451,15 @@ void DesktopWidgetWindow::RenderNetworkMeter(ID2D1DeviceContext* ctx) {
         }
     }
     const float upX = 246.0f - upW;
-    DrawText(ctx, L"↑", m_fontMedium.Get(), D2D1::RectF(upX - 15.0f, 40.0f, upX, 60.0f), kVioletLight);
+    DrawText(ctx, L"↑", m_fontMedium.Get(), D2D1::RectF(upX - 15.0f, 40.0f, upX, 60.0f), kAccent2Light);
     DrawText(ctx, up, m_fontMedium.Get(), D2D1::RectF(upX, 40.0f, 250.0f, 60.0f), kText);
 
     float peak = 48.0f;   // KB/s; never zoom into noise
     for (float v : m.netDownHistory) peak = std::max(peak, v);
     for (float v : m.netUpHistory) peak = std::max(peak, v);
     const core::Rect spark{18.0f, 70.0f, 228.0f, 24.0f};
-    DrawSpark(ctx, m.netUpHistory, peak, spark, A(kVioletLight, 0.45f), false);
-    DrawSpark(ctx, m.netDownHistory, peak, spark, kViolet, true);
+    DrawSpark(ctx, m.netUpHistory, peak, spark, A(kAccent2Light, 0.50f), false);
+    DrawSpark(ctx, m.netDownHistory, peak, spark, kAccent2, true);
 }
 
 // ---- Storage: one bar per drive (like the mockup) ----------------------------------------------
@@ -400,15 +490,31 @@ void DesktopWidgetWindow::RenderStorage(ID2D1DeviceContext* ctx) {
         wchar_t nm[96]; swprintf_s(nm, L"%ls (%c:)", d.label.c_str(), d.letter);
         auto sz = [](double gb) { wchar_t b[24]; if (gb >= 1000.0) swprintf_s(b, L"%.2f TB", gb / 1024.0); else swprintf_s(b, L"%.0f GB", gb); return std::wstring(b); };
         const std::wstring usage = sz(d.usedGB) + L" / " + sz(d.totalGB);
-        DrawText(ctx, nm, m_fontSmall.Get(), D2D1::RectF(18.0f, y, 150.0f, y + 14.0f), kText);
-        DrawText(ctx, usage, m_fontTiny.Get(), D2D1::RectF(130.0f, y, 246.0f, y + 14.0f), kMuted);
+        // small drive glyph on the left (vector, no icon font needed): body, lighter top lip, accent LED
+        {
+            const float ix = 18.0f, iy = y + 8.0f, iw = 22.0f, ih = 11.0f;
+            m_brush->SetColor(D2D1::ColorF(0.74f, 0.72f, 0.84f, 0.95f));
+            ctx->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(ix, iy, ix + iw, iy + ih), 3.0f, 3.0f), m_brush.Get());
+            m_brush->SetColor(D2D1::ColorF(0.95f, 0.94f, 1.0f, 0.95f));
+            ctx->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(ix + 1.0f, iy + 0.5f, ix + iw - 1.0f, iy + 4.0f), 2.0f, 2.0f), m_brush.Get());
+            m_brush->SetColor(D2D1::ColorF(kAccent2Light.r, kAccent2Light.g, kAccent2Light.b, 1.0f));
+            ctx->FillEllipse(D2D1::Ellipse(D2D1::Point2F(ix + 4.5f, iy + 7.5f), 1.1f, 1.1f), m_brush.Get());
+        }
+        const float x0 = 48.0f, x1 = 246.0f;   // text and bar column
+        DrawText(ctx, nm, m_fontSmall.Get(), D2D1::RectF(x0, y, 170.0f, y + 14.0f), kText);
+        DrawText(ctx, usage, m_fontTinyR.Get(), D2D1::RectF(110.0f, y, x1, y + 14.0f), kMuted);
         const float frac = std::clamp(static_cast<float>(d.usedGB / d.totalGB), 0.0f, 1.0f);
-        const D2D1_RECT_F track = D2D1::RectF(18.0f, y + 20.0f, 246.0f, y + 24.0f);
-        m_brush->SetColor(D2D1::ColorF(1, 1, 1, 0.10f));
-        ctx->FillRoundedRectangle(D2D1::RoundedRect(track, 2.0f, 2.0f), m_brush.Get());
-        const float fw = (track.right - track.left) * frac;
-        if (auto g = m_dcomp->CreateLinearGradientBrush(kViolet, kVioletLight, D2D1::Point2F(track.left, 0), D2D1::Point2F(track.right, 0)))
-            ctx->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(track.left, track.top, track.left + std::max(fw, 4.0f), track.bottom), 2.0f, 2.0f), g.Get());
+        const D2D1_RECT_F track = D2D1::RectF(x0, y + 19.0f, x1, y + 25.0f);
+        m_brush->SetColor(D2D1::ColorF(1, 1, 1, 0.09f));
+        ctx->FillRoundedRectangle(D2D1::RoundedRect(track, 3.0f, 3.0f), m_brush.Get());
+        const float fw = std::max((track.right - track.left) * frac, 5.0f);
+        const D2D1_RECT_F fill = D2D1::RectF(track.left, track.top, track.left + fw, track.bottom);
+        // soft glow under the fill, then deep accent -> light accent across the fill itself (measured on the concept)
+        m_brush->SetColor(D2D1::ColorF(kAccent2.r, kAccent2.g, kAccent2.b, 0.20f));
+        ctx->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(fill.left - 1.0f, fill.top - 2.0f, fill.right + 1.0f, fill.bottom + 2.0f), 4.0f, 4.0f), m_brush.Get());
+        if (auto g = m_dcomp->CreateLinearGradientBrush({{0.0f, core::Color::Lerp(kAccent2, kVioletDeep, 0.25f)}, {1.0f, core::Color::Lerp(kAccent2, kAccent2Light, 0.85f)}},
+                                                        D2D1::Point2F(fill.left, 0), D2D1::Point2F(fill.right, 0)))
+            ctx->FillRoundedRectangle(D2D1::RoundedRect(fill, 3.0f, 3.0f), g.Get());
     }
 }
 
@@ -447,7 +553,7 @@ void DesktopWidgetWindow::RenderWeather(ID2D1DeviceContext* ctx) {
     const bar::WeatherNow w = bar::WeatherService::Instance().Get();
     if (!w.valid) { DrawText(ctx, i18n::Pick(L"Loading weather...", L"Hava durumu yükleniyor..."), m_fontTitle.Get(), D2D1::RectF(18.0f, 10.0f, 246.0f, 34.0f), kMuted); return; }
     const auto kind = bar::WeatherService::KindOf(w.code, w.day);
-    MiniWeatherIcon(ctx, m_brush.Get(), 34.0f, 36.0f, 40.0f, kind, m_time);
+    MiniWeatherIcon(ctx, m_brush.Get(), 34.0f, 36.0f, 40.0f, kind, 0.0f);   // static: the cards redraw once a second, a spinning sun would stutter
     wchar_t tb[16]; swprintf_s(tb, L"%d°C", w.tempC);
     DrawText(ctx, tb, m_fontLarge.Get(), D2D1::RectF(66.0f, 12.0f, 180.0f, 44.0f), kText);
     DrawText(ctx, bar::WeatherService::Describe(w.code, w.day), m_fontSmall.Get(), D2D1::RectF(67.0f, 40.0f, 246.0f, 56.0f), core::Color{0.90f, 0.89f, 0.96f, 1.0f});
@@ -462,14 +568,14 @@ void DesktopWidgetWindow::RenderWeather(ID2D1DeviceContext* ctx) {
         int lo = 99, hi = -99;
         for (int i = 0; i < n; ++i) { lo = std::min(lo, w.hours[i].tempC); hi = std::max(hi, w.hours[i].tempC); }
         for (int i = 0; i < n; ++i) v.push_back(static_cast<float>(w.hours[i].tempC - lo + 1));
-        DrawSpark(ctx, v, static_cast<float>(hi - lo + 2), core::Rect{27.0f, 76.0f, 210.0f, 22.0f}, kViolet, true);
+        DrawSpark(ctx, v, static_cast<float>(hi - lo + 2), core::Rect{27.0f, 76.0f, 210.0f, 22.0f}, kAccent2, true);
     }
     for (int i = 0; i < n; ++i) {
         const float cx = 27.0f + i * (210.0f / std::max(n - 1, 1));
         const auto& h = w.hours[i];
         wchar_t hb[12]; if (i == 0) wcscpy_s(hb, i18n::Pick(L"Now", L"Şimdi")); else swprintf_s(hb, L"%02d", h.hour);
         DrawText(ctx, hb, m_fontTiny.Get(), D2D1::RectF(cx - 22, 106.0f, cx + 22, 118.0f), kMuted);
-        MiniWeatherIcon(ctx, m_brush.Get(), cx, 132.0f, 20.0f, bar::WeatherService::KindOf(h.code, h.day), m_time);
+        MiniWeatherIcon(ctx, m_brush.Get(), cx, 132.0f, 20.0f, bar::WeatherService::KindOf(h.code, h.day), 0.0f);
         wchar_t tb2[12]; swprintf_s(tb2, L"%d°", h.tempC);
         DrawText(ctx, tb2, m_fontTiny.Get(), D2D1::RectF(cx - 22, 148.0f, cx + 22, 162.0f), kText);
     }
@@ -522,8 +628,9 @@ void DesktopWidgetWindow::RenderNowPlaying(ID2D1DeviceContext* ctx) {
     m_brush->SetColor(D2D1::ColorF(1, 1, 1, 0.12f));
     ctx->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(82.0f, 50.0f, 250.0f, 53.0f), 1.5f, 1.5f), m_brush.Get());
     if (frac > 0.0f) {
-        m_brush->SetColor(D2D1::ColorF(kVioletLight.r, kVioletLight.g, kVioletLight.b, 1.0f));
-        ctx->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(82.0f, 50.0f, 82.0f + 168.0f * frac, 53.0f), 1.5f, 1.5f), m_brush.Get());
+        const D2D1_RECT_F pf = D2D1::RectF(82.0f, 50.0f, 82.0f + std::max(168.0f * frac, 3.0f), 53.0f);
+        if (auto g = m_dcomp->CreateLinearGradientBrush({{0.0f, kAccent2}, {1.0f, kAccent2Light}}, D2D1::Point2F(pf.left, 0), D2D1::Point2F(pf.right, 0)))
+            ctx->FillRoundedRectangle(D2D1::RoundedRect(pf, 1.5f, 1.5f), g.Get());
     }
     // transport buttons
     m_btnPrev = core::Rect{104.0f, 60.0f, 30.0f, 28.0f};
@@ -536,7 +643,7 @@ void DesktopWidgetWindow::RenderNowPlaying(ID2D1DeviceContext* ctx) {
             ctx->DrawText(b, 1, m_fontIcon.Get(), &rr, m_brush.Get());
         };
         glyph(0xE892, m_btnPrev, core::Color{1, 1, 1, 0.85f});
-        glyph(playing ? 0xE769 : 0xE768, m_btnPlay, kVioletLight);
+        glyph(playing ? 0xE769 : 0xE768, m_btnPlay, kAccent2Light);
         glyph(0xE893, m_btnNext, core::Color{1, 1, 1, 0.85f});
     }
 }
@@ -547,9 +654,9 @@ LRESULT DesktopWidgetWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, L
             if (m_type == WidgetType::NowPlaying) {
                 const float px = GET_X_LPARAM(lParam) / m_dpiScale - kPad, py = GET_Y_LPARAM(lParam) / m_dpiScale - kPad;
                 auto& ms = media::MediaService::Instance();
-                if (m_btnPrev.Contains(px, py)) { ms.PreviousTrack(); return 0; }
-                if (m_btnPlay.Contains(px, py)) { ms.PlayPause(); return 0; }
-                if (m_btnNext.Contains(px, py)) { ms.NextTrack(); return 0; }
+                if (m_btnPrev.Contains(px, py)) { ms.PreviousTrack(); RedrawSoon(); return 0; }
+                if (m_btnPlay.Contains(px, py)) { ms.PlayPause(); RedrawSoon(); return 0; }
+                if (m_btnNext.Contains(px, py)) { ms.NextTrack(); RedrawSoon(); return 0; }
             }
             m_isDragging = true;
             SetCapture(hwnd);
@@ -614,6 +721,29 @@ LRESULT DesktopWidgetWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, L
             return 0;
         }
 
+        case WM_RBUTTONUP: {
+            if (m_isDragging) return 0;
+            POINT pt; GetCursorPos(&pt);
+            const int cmd = ui::ShowContextMenu({
+                ui::MenuItem(1, L"Bu widget'ı gizle", 0xE711),
+                ui::MenuItem(2, L"Tüm widget'ları gizle", 0xE8BB, true),
+            }, pt, false);
+            if (cmd == 1 || cmd == 2) {
+                auto& cfg = config::ConfigManager::Instance().GetMutable();
+                if (cmd == 2) cfg.widgets.enabled = false;
+                else switch (m_type) {
+                    case WidgetType::SystemMonitor: cfg.widgets.sysMonWidget.enabled = false; break;
+                    case WidgetType::ClockCalendar: cfg.widgets.clockWidget.enabled = false; break;
+                    case WidgetType::NetworkMeter:  cfg.widgets.netWidget.enabled = false; break;
+                    case WidgetType::Storage:       cfg.widgets.storageWidget.enabled = false; break;
+                    case WidgetType::Weather:       cfg.widgets.weatherWidget.enabled = false; break;
+                    case WidgetType::NowPlaying:    cfg.widgets.nowWidget.enabled = false; break;
+                }
+                config::ConfigManager::Instance().Save();
+            }
+            return 0;
+        }
+
         case WM_DESTROY: {
             m_hwnd = nullptr;
             return 0;
@@ -636,6 +766,7 @@ void WidgetManager::Initialize() {
     for (auto& w : m_widgets) {
         w->Create();
     }
+    RedrawSoon(2500);   // smooth first seconds: the glow cache builds on the second frame
     AETHER_LOG_INFO("WidgetManager initialized with " << m_widgets.size() << " desktop widgets");
 }
 
@@ -652,12 +783,15 @@ void WidgetManager::Update(float dt) {
 }
 
 void WidgetManager::Render() {
-    render::glass::SyncTheme();
+    const bool themeChanged = render::glass::SyncTheme();
     if (!m_visible) return;
-    // The cards only change with the metrics (1 s) and the clock: 5 redraws per second are plenty and keep the GPU idle.
+    // The cards change with the metrics and the clock (once a second), so one redraw per second keeps the GPU idle.
+    // A theme change / click / show runs at 5 Hz for a moment (the glow cache needs a second frame to build).
     static ULONGLONG last = 0;
     const ULONGLONG now = GetTickCount64();
-    if (now - last < 200) return;
+    if (themeChanged) RedrawSoon();
+    const ULONGLONG interval = now < g_fastUntil.load() ? 200 : 1000;
+    if (now - last < interval) return;
     last = now;
     for (auto& w : m_widgets) {
         w->Render();
@@ -666,6 +800,7 @@ void WidgetManager::Render() {
 
 void WidgetManager::SetVisible(bool visible) {
     m_visible = visible;
+    if (visible) RedrawSoon();
     for (auto& w : m_widgets) {
         w->Show(visible);
     }

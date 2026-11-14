@@ -132,6 +132,10 @@ void Flyout::Show(HMONITOR mon, int reservedPx, float anchorCenterX) {
     OnShow();
     m_prevDown = true; m_dismissTick = 0;
     m_wantOpen = true; m_open.SnapTo(0.0f); m_open.SetTarget(1.0f);
+    if (!(IsWindowVisible(m_hwnd) && m_backdrop)) {   // still fading out from the last open: keep that snapshot
+        render::CaptureBackdrop(m_dcomp->GetContext(), x + static_cast<int>(m_pad), y + static_cast<int>(m_pad),
+                                static_cast<int>(m_baseW * s), static_cast<int>(ph * s), 4, m_backdrop);
+    }
     ShowWindow(m_hwnd, SW_SHOW);
     const DWORD fg = GetWindowThreadProcessId(GetForegroundWindow(), nullptr), me = GetCurrentThreadId();
     if (fg && fg != me) AttachThreadInput(me, fg, TRUE);
@@ -190,7 +194,8 @@ bool Flyout::Frame(float dt) {
     D2D1_LAYER_PARAMETERS1 lp = D2D1::LayerParameters1(D2D1::InfiniteRect(), nullptr, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1::IdentityMatrix(), o, nullptr, D2D1_LAYER_OPTIONS1_NONE);
     ctx->PushLayer(&lp, nullptr);
     render::DrawGlassGlow(ctx, silhouette.Get(), s, 0.85f);
-    if (body) render::DrawGlassBody(ctx, m_dcomp.get(), m_brush.Get(), body.Get(), panel, s, 1.0f);
+    if (body && m_backdrop) render::FillBackdrop(ctx, m_backdrop, body.Get(), panel, 0.95f);
+    if (body) render::DrawGlassBody(ctx, m_dcomp.get(), m_brush.Get(), body.Get(), panel, s, 1.0f, m_backdrop ? 0.55f : 1.0f);
     OnDraw(ctx, panel);
     ctx->PopLayer();
     ctx->SetTransform(D2D1::Matrix3x2F::Identity());
@@ -334,6 +339,15 @@ void QuickPanel::Refresh() {
 
 void QuickPanel::OnWheel(float n) {
     if (m_view != 0) return;
+    const int under = HitAt(m_mouse);
+    if (under == 5 || under == 6) {   // cursor is on the microphone row: scroll changes the microphone, not the speakers
+        if (auto mv = FlowEndpoint(eCapture)) {
+            m_micVolume = C01(m_micVolume + n * 0.03f);
+            mv->SetMasterVolumeLevelScalar(m_micVolume, nullptr);
+            if (m_micVolume > 0) { mv->SetMute(FALSE, nullptr); m_micMuted = false; }
+        }
+        return;
+    }
     if (auto ev = FlowEndpoint(eRender)) { m_volume = C01(m_volume + n * 0.03f); ev->SetMasterVolumeLevelScalar(m_volume, nullptr); if (m_volume > 0) ev->SetMute(FALSE, nullptr); m_muted = false; }
 }
 
@@ -577,7 +591,22 @@ void TrayPanel::OnDraw(ID2D1DeviceContext* c, const Rect& P) {
         if (i.hidden || !i.icon) continue;
         Rect r{P.x + 20 * s + (k % 6) * (cell + 2 * s), P.y + 56 * s + (k / 6) * (cell + 4 * s), cell, cell};
         auto& e = m_cache[{i.hwnd, i.id}];
-        if (!e.bmp || e.serial != i.serial) { e.bmp = gl::IconToBitmap(m_dcomp->GetContext(), i.icon, static_cast<int>(64 * s)); e.serial = i.serial; }
+        if (!e.bmp || e.serial != i.serial) {
+            // tray HICONs are mostly 16 px: show the owning exe's crisp icon instead, like the taskbar does
+            ComPtr<ID2D1Bitmap1> bmp;
+            if (gl::IconNativeSize(i.icon) < 28) {
+                std::wstring exe;
+                DWORD pid = 0; GetWindowThreadProcessId(i.hwnd, &pid);
+                if (HANDLE h = pid ? OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) : nullptr) {
+                    wchar_t buf[MAX_PATH * 2] = {}; DWORD len = MAX_PATH * 2;
+                    if (QueryFullProcessImageNameW(h, 0, buf, &len)) exe.assign(buf, len);
+                    CloseHandle(h);
+                }
+                bmp = gl::ExeIconBitmap(m_dcomp->GetContext(), exe, 128);
+            }
+            if (!bmp) bmp = gl::IconToBitmap(m_dcomp->GetContext(), i.icon, static_cast<int>(64 * s));
+            e.bmp = bmp; e.serial = i.serial;
+        }
         const bool hot = r.Contains(m_mouse);
         Fill(c, r, 14 * s, hot ? W(0.12f) : W(0.04f));
         if (e.bmp) { const D2D1_RECT_F d = D2D1::RectF(r.Center().x - 14 * s, r.Center().y - 14 * s, r.Center().x + 14 * s, r.Center().y + 14 * s); c->DrawBitmap(e.bmp.Get(), &d, 1.0f, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC); }

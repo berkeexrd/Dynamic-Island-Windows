@@ -36,7 +36,8 @@ bool GamingModeDetector::IsFullscreenWindow(HWND hwnd) const {
     if (wcscmp(className, L"Progman") == 0 ||
         wcscmp(className, L"WorkerW") == 0 ||
         wcscmp(className, L"Shell_TrayWnd") == 0 ||
-        wcscmp(className, L"Shell_SecondaryTrayWnd") == 0) {
+        wcscmp(className, L"Shell_SecondaryTrayWnd") == 0 ||
+        wcscmp(className, L"AetherDesktopWindow") == 0) {
         return false;
     }
 

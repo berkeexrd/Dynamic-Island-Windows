@@ -8,6 +8,7 @@
 #include "aether/core/types.hpp"
 #include "aether/animation/spring.hpp"
 #include "aether/render/dcomp_layer.hpp"
+#include "aether/render/backdrop.hpp"
 
 namespace aether::bar {
 
@@ -52,6 +53,7 @@ protected:
     float m_skipDt{0};
     ComPtr<IDWriteTextFormat> m_fTitle, m_fBody, m_fSmall, m_fBig, m_fIcon, m_fIconBig, m_fCenter, m_fCTitle, m_fCBody, m_fCSmall;
     bool m_hasIcons{false};
+    render::Backdrop m_backdrop;                // blurred snapshot behind the panel (taken when it opens)
     float m_scale{1.0f}, m_baseW{360}, m_baseH{400}, m_pad{24};
     core::Vec2 m_mouse{-1, -1};
     bool m_down{false};

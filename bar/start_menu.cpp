@@ -87,6 +87,133 @@ std::wstring Fold(const std::wstring& s) {
     return out;
 }
 
+// ---- vector file-type icons (the concept uses coloured badges, not the generic shell icons) ------------------
+enum class FileKind { None, Image, Video, Archive, Text, Code, Audio };
+
+FileKind KindOfFile(const std::wstring& name) {
+    const size_t dot = name.find_last_of(L'.');
+    if (dot == std::wstring::npos) return FileKind::None;
+    std::wstring e = name.substr(dot + 1);
+    for (auto& ch : e) ch = static_cast<wchar_t>(towlower(ch));
+    if (dot == 0) return FileKind::Text;   // .gitignore, .env ...
+    static const wchar_t* img[] = {L"png", L"jpg", L"jpeg", L"gif", L"bmp", L"webp", L"tif", L"tiff", L"heic", L"ico"};
+    static const wchar_t* vid[] = {L"mp4", L"mkv", L"avi", L"mov", L"wmv", L"webm", L"m4v"};
+    static const wchar_t* arc[] = {L"zip", L"rar", L"7z", L"tar", L"gz", L"cab"};
+    static const wchar_t* txt[] = {L"txt", L"md", L"log", L"diff", L"patch", L"ini", L"cfg", L"csv", L"rtf"};
+    static const wchar_t* cod[] = {L"sln", L"cpp", L"c", L"h", L"hpp", L"cs", L"js", L"ts", L"py", L"json", L"xml", L"html", L"css", L"cmake", L"bat", L"ps1", L"vcxproj"};
+    static const wchar_t* aud[] = {L"mp3", L"wav", L"flac", L"ogg", L"m4a", L"aac"};
+    auto in = [&](const wchar_t* const* list, size_t n) { for (size_t i = 0; i < n; ++i) if (e == list[i]) return true; return false; };
+    if (in(img, std::size(img))) return FileKind::Image;
+    if (in(vid, std::size(vid))) return FileKind::Video;
+    if (in(arc, std::size(arc))) return FileKind::Archive;
+    if (in(txt, std::size(txt))) return FileKind::Text;
+    if (in(cod, std::size(cod))) return FileKind::Code;
+    if (in(aud, std::size(aud))) return FileKind::Audio;
+    return FileKind::None;
+}
+
+ComPtr<ID2D1LinearGradientBrush> VGrad(ID2D1DeviceContext* ctx, const Color& a, const Color& b, float x0, float y0, float x1, float y1) {
+    D2D1_GRADIENT_STOP st[2] = {{0.0f, D2D1::ColorF(a.r, a.g, a.b, a.a)}, {1.0f, D2D1::ColorF(b.r, b.g, b.b, b.a)}};
+    ComPtr<ID2D1GradientStopCollection> gc;
+    ComPtr<ID2D1LinearGradientBrush> br;
+    if (SUCCEEDED(ctx->CreateGradientStopCollection(st, 2, &gc)) && gc)
+        ctx->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties(D2D1::Point2F(x0, y0), D2D1::Point2F(x1, y1)), gc.Get(), &br);
+    return br;
+}
+
+// Draws the badge inside `r` (a square). Returns false for unknown types so the caller falls back to the shell icon.
+bool DrawFileBadge(ID2D1DeviceContext* ctx, ID2D1SolidColorBrush* br, FileKind kind, const Rect& r) {
+    if (kind == FileKind::None) return false;
+    ComPtr<ID2D1Factory> fac;
+    ctx->GetFactory(&fac);
+    const float u = r.width;
+    auto P = [&](float fx, float fy) { return D2D1::Point2F(r.x + fx * u, r.y + fy * u); };
+    auto poly = [&](std::initializer_list<D2D1_POINT_2F> pts, ID2D1Brush* b) {
+        if (!fac) return;
+        ComPtr<ID2D1PathGeometry> g; ComPtr<ID2D1GeometrySink> sk;
+        if (FAILED(fac->CreatePathGeometry(&g)) || FAILED(g->Open(&sk))) return;
+        bool first = true;
+        for (const auto& pt : pts) { if (first) { sk->BeginFigure(pt, D2D1_FIGURE_BEGIN_FILLED); first = false; } else sk->AddLine(pt); }
+        sk->EndFigure(D2D1_FIGURE_END_CLOSED); sk->Close();
+        ctx->FillGeometry(g.Get(), b);
+    };
+    auto tile = [&](const Color& top, const Color& bot) {
+        auto g = VGrad(ctx, top, bot, r.x, r.y, r.x + u * 0.4f, r.Bottom());
+        const D2D1_ROUNDED_RECT rr = D2D1::RoundedRect(RF(r.x, r.y, r.Right(), r.Bottom()), u * 0.24f, u * 0.24f);
+        if (g) ctx->FillRoundedRectangle(rr, g.Get());
+    };
+    auto white = [&](float a) { br->SetColor(D2D1::ColorF(1, 1, 1, a)); };
+    switch (kind) {
+        case FileKind::Image: {
+            tile(Color{0.38f, 0.80f, 1.0f, 1.0f}, Color{0.15f, 0.38f, 0.86f, 1.0f});
+            white(0.95f);
+            ctx->FillEllipse(D2D1::Ellipse(P(0.70f, 0.30f), u * 0.085f, u * 0.085f), br);
+            poly({P(0.10f, 0.86f), P(0.40f, 0.42f), P(0.62f, 0.72f), P(0.72f, 0.60f), P(0.92f, 0.86f)}, br);
+            break;
+        }
+        case FileKind::Video: {
+            tile(Color{0.70f, 0.42f, 1.0f, 1.0f}, Color{0.44f, 0.20f, 0.86f, 1.0f});
+            white(0.97f);
+            poly({P(0.38f, 0.26f), P(0.38f, 0.74f), P(0.76f, 0.50f)}, br);
+            break;
+        }
+        case FileKind::Archive: {
+            tile(Color{1.0f, 0.80f, 0.24f, 1.0f}, Color{0.94f, 0.56f, 0.08f, 1.0f});
+            br->SetColor(D2D1::ColorF(0.45f, 0.27f, 0.04f, 0.55f));
+            for (int i = 0; i < 4; ++i)
+                ctx->FillRectangle(RF(r.x + u * (i % 2 ? 0.50f : 0.43f), r.y + u * (0.10f + i * 0.11f), r.x + u * (i % 2 ? 0.57f : 0.50f), r.y + u * (0.17f + i * 0.11f)), br);
+            white(0.92f);
+            ctx->FillRoundedRectangle(D2D1::RoundedRect(RF(r.x + u * 0.41f, r.y + u * 0.56f, r.x + u * 0.59f, r.y + u * 0.78f), u * 0.05f, u * 0.05f), br);
+            break;
+        }
+        case FileKind::Text: {
+            auto g = VGrad(ctx, Color{0.98f, 0.98f, 1.0f, 1.0f}, Color{0.78f, 0.80f, 0.90f, 1.0f}, r.x, r.y, r.x, r.Bottom());
+            const float x0 = r.x + u * 0.20f, x1 = r.x + u * 0.80f, y0 = r.y + u * 0.06f, y1 = r.y + u * 0.94f;
+            if (g) {
+                ctx->FillRoundedRectangle(D2D1::RoundedRect(RF(x0, y0, x1, y1), u * 0.08f, u * 0.08f), g.Get());
+            }
+            br->SetColor(D2D1::ColorF(0.50f, 0.52f, 0.64f, 0.85f));
+            for (int i = 0; i < 4; ++i)
+                ctx->FillRoundedRectangle(D2D1::RoundedRect(RF(x0 + u * 0.10f, y0 + u * (0.30f + i * 0.14f), x1 - u * (i == 3 ? 0.26f : 0.10f), y0 + u * (0.34f + i * 0.14f)), u * 0.02f, u * 0.02f), br);
+            br->SetColor(D2D1::ColorF(0.62f, 0.64f, 0.78f, 1.0f));
+            poly({D2D1::Point2F(x1 - u * 0.22f, y0), D2D1::Point2F(x1, y0 + u * 0.22f), D2D1::Point2F(x1 - u * 0.22f, y0 + u * 0.22f)}, br);
+            break;
+        }
+        case FileKind::Code: {
+            tile(Color{0.62f, 0.38f, 0.96f, 1.0f}, Color{0.38f, 0.18f, 0.74f, 1.0f});
+            white(0.96f);
+            const float w = u * 0.075f;
+            ctx->DrawLine(P(0.40f, 0.30f), P(0.24f, 0.50f), br, w, nullptr);
+            ctx->DrawLine(P(0.24f, 0.50f), P(0.40f, 0.70f), br, w, nullptr);
+            ctx->DrawLine(P(0.60f, 0.30f), P(0.76f, 0.50f), br, w, nullptr);
+            ctx->DrawLine(P(0.76f, 0.50f), P(0.60f, 0.70f), br, w, nullptr);
+            white(0.7f);
+            ctx->DrawLine(P(0.54f, 0.26f), P(0.46f, 0.74f), br, w * 0.8f, nullptr);
+            break;
+        }
+        case FileKind::Audio: {
+            tile(Color{1.0f, 0.46f, 0.70f, 1.0f}, Color{0.82f, 0.20f, 0.52f, 1.0f});
+            white(0.96f);
+            ctx->FillEllipse(D2D1::Ellipse(P(0.40f, 0.68f), u * 0.12f, u * 0.10f), br);
+            ctx->FillRectangle(RF(r.x + u * 0.48f, r.y + u * 0.24f, r.x + u * 0.55f, r.y + u * 0.68f), br);
+            poly({P(0.55f, 0.24f), P(0.74f, 0.32f), P(0.74f, 0.44f), P(0.55f, 0.36f)}, br);
+            break;
+        }
+        default: return false;
+    }
+    return true;
+}
+
+// "Microsoft Edge" -> "Edge" etc.: the concept uses the short product names
+std::wstring ShortAppName(const std::wstring& n) {
+    static const wchar_t* pre[] = {L"Microsoft ", L"Windows "};
+    for (const wchar_t* p : pre) {
+        const size_t len = wcslen(p);
+        if (n.size() > len + 2 && n.compare(0, len, p) == 0) return n.substr(len);
+    }
+    return n;
+}
+
 std::wstring DataPath(const wchar_t* file) {
     wchar_t appdata[MAX_PATH];
     if (FAILED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, appdata))) return L"";
@@ -511,6 +638,18 @@ void StartMenu::LoadAvatar() {
     }
 }
 
+// Grabs the desktop behind the panel (the menu window is still hidden / not yet shown), shrinks it 4x,
+// blurs it on the CPU (tiny image, ~1 ms) and uploads it. Render() paints it scaled back up under the
+// glass body, which is what gives the panel its real frosted-glass look - Direct2D cannot blur what is
+// behind a window by itself. Failure is harmless: the panel just stays plain translucent.
+void StartMenu::CaptureBackdrop() {
+    if (!m_dcomp || !m_hwnd) return;
+    if (IsWindowVisible(m_hwnd) && m_backdrop) return;   // still fading out from the previous open: keep that one
+    RECT wr; GetWindowRect(m_hwnd, &wr);
+    render::CaptureBackdrop(m_dcomp->GetContext(), wr.left + static_cast<int>(m_pad), wr.top + static_cast<int>(m_pad),
+                            static_cast<int>(kPanelW * m_scale), static_cast<int>(kPanelH * m_scale), 5, m_backdrop);
+}
+
 // =============================================================================================
 //  Window
 // =============================================================================================
@@ -588,7 +727,7 @@ void StartMenu::CreateFonts() {
     make(m_fSearch,  text,    DWRITE_FONT_WEIGHT_NORMAL,    13.5f, L_, true);
     make(m_fHead,    display, DWRITE_FONT_WEIGHT_SEMI_BOLD, 14.5f, L_, false);
     make(m_fLink,    text,    DWRITE_FONT_WEIGHT_NORMAL,    12.0f, T_, false);
-    make(m_fTile,    text,    DWRITE_FONT_WEIGHT_NORMAL,    11.5f, C_, true);
+    make(m_fTile,    text,    DWRITE_FONT_WEIGHT_NORMAL,    11.0f, C_, true);
     make(m_fRecName, display, DWRITE_FONT_WEIGHT_SEMI_BOLD, 12.5f, L_, true);
     make(m_fRecSub,  text,    DWRITE_FONT_WEIGHT_NORMAL,    11.0f, L_, true);
     make(m_fRowName, display, DWRITE_FONT_WEIGHT_SEMI_BOLD, 13.0f, L_, true);
@@ -603,11 +742,7 @@ void StartMenu::Toggle(HMONITOR monitor, int reservedPx) {
     if (m_wantOpen) Hide(); else Show(monitor, reservedPx);
 }
 
-void StartMenu::Show(HMONITOR monitor, int reservedPx) {
-    if (!m_hwnd) return;
-    AdoptLoaded();
-    if (m_loadState.load() == 0) PreloadAsync();
-
+void StartMenu::PrepareFor(HMONITOR monitor, int reservedPx) {
     MONITORINFO mi = {sizeof(mi)};
     GetMonitorInfoW(monitor, &mi);
     float s = core::MonitorScale(monitor);
@@ -628,8 +763,51 @@ void StartMenu::Show(HMONITOR monitor, int reservedPx) {
         for (auto& a : m_apps) { a.icon.Reset(); a.iconTried = false; }
         for (auto& f : m_recents) { f.icon.Reset(); f.iconTried = false; }
         for (auto& f : m_files) { f.icon.Reset(); f.iconTried = false; }
+        m_warmed = false;
     }
     LoadAvatar();
+}
+
+// Runs while the menu is hidden: loads the avatar + the icons of the first screen and renders one invisible frame,
+// which builds the glow / gradient caches. Without it all of that happened on the first click (visible hitch).
+bool StartMenu::Warm() {
+    if (m_warmed || !m_hwnd || m_wantOpen || IsWindowVisible(m_hwnd)) return false;
+    AdoptLoaded();
+    if (!m_adopted) return m_loadState.load() != 0;   // app list still loading: try again later
+    HMONITOR mon = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+    PrepareFor(mon, static_cast<int>(82.0f * core::MonitorScale(mon)));
+    m_query.clear(); m_view = View::Home; m_scroll.SnapTo(0.0f);
+    BuildLayout();
+    int budget = 4;
+    for (int idx : m_pinnedIdx) {
+        if (idx < 0 || idx >= static_cast<int>(m_apps.size())) continue;
+        App& a = m_apps[idx];
+        if (a.icon || a.iconTried) continue;
+        if (budget-- <= 0) return true;
+        EnsureAppIcon(a);
+    }
+    for (size_t i = 0; i < m_recents.size() && i < 6; ++i) {
+        FileItem& f = m_recents[i];
+        if (f.icon || f.iconTried) continue;
+        if (budget-- <= 0) return true;
+        EnsureFileIcon(f);
+    }
+    m_open.SnapTo(1.0f);
+    Render();
+    m_open.SnapTo(0.0f); m_open.SetTarget(0.0f);
+    m_warmed = true;
+    return false;
+}
+
+void StartMenu::Show(HMONITOR monitor, int reservedPx) {
+    if (!m_hwnd) return;
+    AdoptLoaded();
+    if (m_loadState.load() == 0) PreloadAsync();
+
+    MONITORINFO mi = {sizeof(mi)};
+    GetMonitorInfoW(monitor, &mi);
+    PrepareFor(monitor, reservedPx);
+    const float s = m_scale;
 
     const int cx = (mi.rcMonitor.left + mi.rcMonitor.right) / 2;
     const int bottom = mi.rcMonitor.bottom - reservedPx - static_cast<int>(6.0f * s);
@@ -647,6 +825,7 @@ void StartMenu::Show(HMONITOR monitor, int reservedPx) {
     m_open.SnapTo(0.0f);
     m_open.SetTarget(1.0f);
     m_viewT.SnapTo(1.0f);
+    CaptureBackdrop();
     ShowWindow(m_hwnd, SW_SHOW);
 
     // take the keyboard focus (needed for typing to search)
@@ -693,7 +872,7 @@ bool StartMenu::Frame(float dt) {
         ShowWindow(m_hwnd, SW_HIDE);
         return false;
     }
-    if (!IsWindowVisible(m_hwnd)) return false;
+    if (!IsWindowVisible(m_hwnd)) return Warm();
     Render();
     return true;
 }
@@ -1131,7 +1310,6 @@ void StartMenu::Render() {
     auto silhouette = render::RecordSilhouette(m_dcomp.get(), {body.Get()}, s, 1.0f);   // must happen before BeginDraw
     auto ctx = m_dcomp->BeginDraw();
     if (!ctx) return;
-
     // ---- hover bookkeeping -------------------------------------------------------------------
     m_hoverId = (m_mouse.x >= 0.0f && m_wantOpen) ? HitTest(m_mouse) : 0;
     for (auto it = m_hoverAmt.begin(); it != m_hoverAmt.end();) {
@@ -1150,8 +1328,32 @@ void StartMenu::Render() {
 
     // ---- body ---------------------------------------------------------------------------------
     render::DrawGlassGlow(ctx, silhouette.Get(), s, 1.0f);
+    if (body && m_backdrop) render::FillBackdrop(ctx, m_backdrop, body.Get(), panel, 1.0f);   // frosted backdrop under the glass body
     if (body) {
-        render::DrawGlassBody(ctx, m_dcomp.get(), m_brush.Get(), body.Get(), panel, s, 1.0f);
+        render::DrawGlassBody(ctx, m_dcomp.get(), m_brush.Get(), body.Get(), panel, s, 1.0f, m_backdrop ? 0.46f : 1.0f);
+        {   // the rail is a darker, slightly deeper pane than the content area
+            D2D1_LAYER_PARAMETERS1 rl = D2D1::LayerParameters1(D2D1::InfiniteRect(), body.Get(), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                                                               D2D1::IdentityMatrix(), 1.0f, nullptr, D2D1_LAYER_OPTIONS1_NONE);
+            ctx->PushLayer(&rl, nullptr);
+            if (auto rg = m_dcomp->CreateLinearGradientBrush(Color{0.0f, 0.0f, 0.0f, 0.34f}, Color{0.0f, 0.0f, 0.0f, 0.20f},
+                                                             D2D1::Point2F(panel.x, panel.y), D2D1::Point2F(panel.x + kRailW * s, panel.y)))
+                ctx->FillRectangle(RF(panel.x, panel.y, panel.x + kRailW * s, panel.Bottom()), rg.Get());
+            ctx->PopLayer();
+        }
+        {   // a band of light that slowly travels around the rim (reflection), plus a soft bloom of it
+            const float ang = m_time * 0.45f;
+            const Vec2 c = panel.Center();
+            const float L = std::max(panel.width, panel.height) * 0.62f;
+            const D2D1_POINT_2F p0 = D2D1::Point2F(c.x + std::cos(ang) * L, c.y + std::sin(ang) * L * 0.8f);
+            const D2D1_POINT_2F p1 = D2D1::Point2F(c.x - std::cos(ang) * L, c.y - std::sin(ang) * L * 0.8f);
+            const Color hot = Color::Lerp(Color{1.0f, 1.0f, 1.0f, 1.0f}, render::glass::kVioletLight, 0.35f);
+            if (auto rim = m_dcomp->CreateLinearGradientBrush({{0.00f, A(render::glass::kAccent2, 0.0f)}, {0.36f, A(render::glass::kVioletLight, 0.0f)},
+                                                               {0.50f, A(hot, 0.80f)}, {0.64f, A(render::glass::kAccent2, 0.0f)}, {1.00f, A(render::glass::kAccent2, 0.0f)}}, p0, p1))
+                ctx->DrawGeometry(body.Get(), rim.Get(), 1.5f * s);
+            if (auto bloom = m_dcomp->CreateLinearGradientBrush({{0.00f, A(render::glass::kAccent2, 0.0f)}, {0.30f, A(render::glass::kViolet, 0.0f)},
+                                                                 {0.50f, A(render::glass::kViolet, 0.30f)}, {0.70f, A(render::glass::kAccent2, 0.0f)}, {1.00f, A(render::glass::kAccent2, 0.0f)}}, p0, p1))
+                ctx->DrawGeometry(body.Get(), bloom.Get(), 7.0f * s);
+        }
         // divider between the rail and the content pane
         m_brush->SetColor(D2D1::ColorF(1, 1, 1, 0.07f));
         ctx->FillRectangle(RF(panel.x + kRailW * s, panel.y + 1.0f * s, panel.x + kRailW * s + 1.0f * s, panel.Bottom() - 1.0f * s), m_brush.Get());
@@ -1201,17 +1403,33 @@ void StartMenu::Render() {
         const float h = Hover(n.id);
         const bool active = n.id == activeNav || (n.id == kIdPower && m_powerOpen);
         Color ink = W(0.86f + 0.14f * h);
+        Color iconInk = ink;
         if (active) {
-            for (int i = 3; i >= 1; --i)
-                Stroke(ctx, Rect{r.x - i * 2.0f * s, r.y - i * 2.0f * s, r.width + i * 4.0f * s, r.height + i * 4.0f * s}, 12.0f * s + i * 2.0f * s,
-                       A(ui::kPurple, 0.07f * (4 - i) * 0.6f), 2.0f * s);
-            auto g = m_dcomp->CreateLinearGradientBrush(A(ui::kPurple, 0.92f), A(ui::kPurpleDeep, 0.50f), D2D1::Point2F(r.x, r.y), D2D1::Point2F(r.Right(), r.y));
+            // concept look: colour fades from a saturated violet on the left into the panel on the right, a thin
+            // lit accent bar on the left edge, soft bloom - not a uniform purple block
+            if (auto bloom = m_dcomp->CreateLinearGradientBrush({{0.0f, A(ui::kPurple, 0.20f)}, {1.0f, A(ui::kPurple, 0.0f)}},
+                                                                D2D1::Point2F(r.x, r.y), D2D1::Point2F(r.Right(), r.y)))
+                if (auto geo = m_dcomp->CreateSquircleGeometry(Rect{r.x - 4.0f * s, r.y - 4.0f * s, r.width + 8.0f * s, r.height + 8.0f * s}, 16.0f * s))
+                    ctx->FillGeometry(geo.Get(), bloom.Get());
             if (auto geo = m_dcomp->CreateSquircleGeometry(r, 12.0f * s)) {
-                if (g) ctx->FillGeometry(geo.Get(), g.Get());
-                m_brush->SetColor(D2D1::ColorF(1, 1, 1, 0.26f));
-                ctx->DrawGeometry(geo.Get(), m_brush.Get(), 1.0f * s);
+                if (auto g = m_dcomp->CreateLinearGradientBrush({{0.00f, A(ui::kPurple, 0.88f)}, {0.45f, A(ui::kPurpleDeep, 0.52f)}, {1.00f, A(ui::kPurpleDeep, 0.10f)}},
+                                                                D2D1::Point2F(r.x, r.y), D2D1::Point2F(r.Right(), r.y)))
+                    ctx->FillGeometry(geo.Get(), g.Get());
+                if (auto sheen = m_dcomp->CreateLinearGradientBrush(W(0.10f), W(0.0f), D2D1::Point2F(r.x, r.y), D2D1::Point2F(r.x, r.y + r.height * 0.55f)))
+                    ctx->FillGeometry(geo.Get(), sheen.Get());
+                if (auto rim = m_dcomp->CreateLinearGradientBrush({{0.0f, A(ui::kPurpleLight, 0.50f)}, {0.6f, A(ui::kPurpleLight, 0.10f)}, {1.0f, A(ui::kPurpleLight, 0.0f)}},
+                                                                  D2D1::Point2F(r.x, r.y), D2D1::Point2F(r.Right(), r.y)))
+                    ctx->DrawGeometry(geo.Get(), rim.Get(), 1.0f * s);
+            }
+            {   // left accent bar with a little glow
+                const float bh = r.height * 0.56f, bx = r.x + 1.5f * s, by = r.Center().y - bh / 2;
+                m_brush->SetColor(D2D1::ColorF(ui::kPurpleLight.r, ui::kPurpleLight.g, ui::kPurpleLight.b, 0.28f));
+                ctx->FillRoundedRectangle(D2D1::RoundedRect(RF(bx - 2.0f * s, by - 2.0f * s, bx + 5.0f * s, by + bh + 2.0f * s), 3.5f * s, 3.5f * s), m_brush.Get());
+                m_brush->SetColor(D2D1::ColorF(ui::kPurpleLight.r, ui::kPurpleLight.g, ui::kPurpleLight.b, 0.95f));
+                ctx->FillRoundedRectangle(D2D1::RoundedRect(RF(bx, by, bx + 2.4f * s, by + bh), 1.2f * s, 1.2f * s), m_brush.Get());
             }
             ink = W(1.0f);
+            iconInk = Color::Lerp(W(1.0f), A(ui::kPurpleLight, 1.0f), 0.40f);   // lavender-tinted glyph like the concept
         } else if (h > 0.01f) {
             Fill(ctx, r, 12.0f * s, W(0.065f * h));
         }
@@ -1220,28 +1438,34 @@ void StartMenu::Render() {
             const float cell = 7.0f * s, gap = 2.4f * s;
             for (int iy = 0; iy < 2; ++iy) for (int ix = 0; ix < 2; ++ix) {
                 const float x = cx - cell - gap / 2 + ix * (cell + gap), y = cy - cell - gap / 2 + iy * (cell + gap);
-                m_brush->SetColor(D2D1::ColorF(ink.r, ink.g, ink.b, ink.a));
+                m_brush->SetColor(D2D1::ColorF(iconInk.r, iconInk.g, iconInk.b, iconInk.a));
                 ctx->FillRoundedRectangle(D2D1::RoundedRect(RF(x, y, x + cell, y + cell), 1.8f * s, 1.8f * s), m_brush.Get());
             }
         } else if (n.special == 2) {     // All apps: outlined 2x2
             const float cell = 7.0f * s, gap = 2.4f * s;
             for (int iy = 0; iy < 2; ++iy) for (int ix = 0; ix < 2; ++ix) {
                 const float x = cx - cell - gap / 2 + ix * (cell + gap), y = cy - cell - gap / 2 + iy * (cell + gap);
-                m_brush->SetColor(D2D1::ColorF(ink.r, ink.g, ink.b, ink.a));
+                m_brush->SetColor(D2D1::ColorF(iconInk.r, iconInk.g, iconInk.b, iconInk.a));
                 ctx->DrawRoundedRectangle(D2D1::RoundedRect(RF(x + 0.5f * s, y + 0.5f * s, x + cell - 0.5f * s, y + cell - 0.5f * s), 1.8f * s, 1.8f * s), m_brush.Get(), 1.2f * s);
             }
         } else {
-            DrawGlyph(ctx, n.glyph, RF(cx - 14.0f * s, r.y, cx + 14.0f * s, r.Bottom()), ink);
+            DrawGlyph(ctx, n.glyph, RF(cx - 14.0f * s, r.y, cx + 14.0f * s, r.Bottom()), iconInk);
         }
         DrawText(ctx, i18n::Pick(n.en, n.tr), m_fNav.Get(), RF(r.x + 52.0f * s, r.y, r.Right() - 8.0f * s, r.Bottom()), ink);
+    }
+
+    {   // hairline above Settings / Power
+        const Rect dv = Px(Rect{24, 431, 178, 1});
+        m_brush->SetColor(D2D1::ColorF(1, 1, 1, 0.075f));
+        ctx->FillRectangle(RF(dv), m_brush.Get());
     }
 
     // ---- search box -----------------------------------------------------------------------------
     {
         const Rect box = Px(Rect{kPaneX, kSearchY, kPaneW, kSearchH});
-        Fill(ctx, box, box.height / 2, W(0.085f));
-        Stroke(ctx, box, box.height / 2, m_query.empty() ? W(0.10f) : A(ui::kPurple, 0.65f), 1.0f * s);
-        DrawGlyph(ctx, ui::kGlyphSearch, RF(box.x + 10.0f * s, box.y, box.x + 42.0f * s, box.Bottom()), W(0.62f), m_fIconSm.Get());
+        Fill(ctx, box, box.height / 2, W(0.060f));
+        Stroke(ctx, box, box.height / 2, m_query.empty() ? W(0.15f) : A(ui::kPurple, 0.65f), 1.0f * s);
+        DrawGlyph(ctx, ui::kGlyphSearch, RF(box.x + 8.0f * s, box.y, box.x + 42.0f * s, box.Bottom()), W(0.88f), m_fIcon.Get());
         const float tx = box.x + 50.0f * s;
         const float tr = box.Right() - 46.0f * s;
         if (m_query.empty()) {
@@ -1312,18 +1536,23 @@ void StartMenu::Render() {
                     App& app = m_apps[it.ref];
                     if (!app.icon && !app.iconTried && iconBudget > 0) { EnsureAppIcon(app); --iconBudget; }
                     rowBg(Rect{r.x + 3 * s, r.y + 2 * s, r.width - 6 * s, r.height - 4 * s}, 14.0f * s);
-                    const float isz = 40.0f * s, lift = 2.0f * s * h;
-                    const float ix = r.Center().x - isz / 2, iy = r.y + 9.0f * s - lift;
-                    {   // glass icon tile
-                        const Rect tile{ix - 6.0f * s, iy - 5.0f * s, isz + 12.0f * s, isz + 10.0f * s};
-                        Fill(ctx, tile, 15.0f * s, Color{0.12f, 0.09f, 0.20f, 0.55f + 0.2f * h});
-                        Stroke(ctx, tile, 15.0f * s, A(ui::kPurpleLight, 0.16f + 0.3f * h), 1.0f * s);
+                    const float isz = 30.0f * s, lift = 2.0f * s * h;
+                    const float cx = r.Center().x;
+                    {   // dark glass icon tile: top-lit rim, deep fill
+                        const Rect tile{cx - 25.0f * s, r.y + 4.0f * s - lift, 50.0f * s, 50.0f * s};
+                        if (auto g = m_dcomp->CreateSquircleGeometry(tile, 15.0f * s)) {
+                            if (auto f = VGrad(ctx, Color{0.150f, 0.115f, 0.230f, 0.50f + 0.14f * h}, Color{0.070f, 0.052f, 0.120f, 0.58f}, tile.x, tile.y, tile.x, tile.Bottom()))
+                                ctx->FillGeometry(g.Get(), f.Get());
+                            if (auto rm = VGrad(ctx, A(ui::kPurpleLight, 0.30f + 0.35f * h), A(ui::kPurple, 0.07f + 0.15f * h), tile.x, tile.y, tile.Right(), tile.Bottom()))
+                                ctx->DrawGeometry(g.Get(), rm.Get(), 1.0f * s);
+                        }
                     }
+                    const float ix = cx - isz / 2, iy = r.y + 4.0f * s + 25.0f * s - isz / 2 - lift;
                     if (app.icon) {
                         const D2D1_RECT_F dst = RF(ix, iy, ix + isz, iy + isz);
                         ctx->DrawBitmap(app.icon.Get(), &dst, 1.0f, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
                     } else Fill(ctx, Rect{ix, iy, isz, isz}, 10.0f * s, W(0.08f));
-                    DrawText(ctx, app.name, m_fTile.Get(), RF(r.x + 4 * s, r.y + 53.0f * s, r.Right() - 4 * s, r.y + 77.0f * s), W(0.90f));
+                    DrawText(ctx, ShortAppName(app.name), m_fTile.Get(), RF(r.x + 2 * s, r.y + 57.0f * s, r.Right() - 2 * s, r.y + 77.0f * s), W(0.88f));
                     break;
                 }
 
@@ -1331,17 +1560,21 @@ void StartMenu::Render() {
                     FileItem& f = m_recents[it.ref];
                     if (!f.icon && !f.iconTried && iconBudget > 0) { EnsureFileIcon(f); --iconBudget; }
                     rowBg(r, 14.0f * s);
-                    const float isz = 36.0f * s;
-                    const float ix = r.x + 16.0f * s, iy = r.Center().y - isz / 2;
-                    {
-                        const Rect tile{ix - 5.0f * s, iy - 5.0f * s, isz + 10.0f * s, isz + 10.0f * s};
-                        Fill(ctx, tile, 12.0f * s, Color{0.12f, 0.09f, 0.20f, 0.50f + 0.2f * h});
-                        Stroke(ctx, tile, 12.0f * s, A(ui::kPurpleLight, 0.12f + 0.25f * h), 1.0f * s);
+                    const float isz = 28.0f * s;
+                    const Rect tile{r.x + 10.0f * s, r.Center().y - 23.0f * s, 46.0f * s, 46.0f * s};
+                    const float ix = tile.x + (tile.width - isz) / 2, iy = tile.y + (tile.height - isz) / 2;
+                    if (auto g = m_dcomp->CreateSquircleGeometry(tile, 13.0f * s)) {
+                        if (auto fl = VGrad(ctx, Color{0.150f, 0.115f, 0.230f, 0.50f + 0.14f * h}, Color{0.070f, 0.052f, 0.120f, 0.58f}, tile.x, tile.y, tile.x, tile.Bottom()))
+                            ctx->FillGeometry(g.Get(), fl.Get());
+                        if (auto rm = VGrad(ctx, A(ui::kPurpleLight, 0.26f + 0.35f * h), A(ui::kPurple, 0.06f + 0.15f * h), tile.x, tile.y, tile.Right(), tile.Bottom()))
+                            ctx->DrawGeometry(g.Get(), rm.Get(), 1.0f * s);
                     }
-                    if (f.icon) { const D2D1_RECT_F dst = RF(ix, iy, ix + isz, iy + isz); ctx->DrawBitmap(f.icon.Get(), &dst, 1.0f, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC); }
-                    else Fill(ctx, Rect{ix, iy, isz, isz}, 9.0f * s, W(0.08f));
-                    DrawText(ctx, f.name, m_fRecName.Get(), RF(r.x + 62.0f * s, r.y + 7.0f * s, r.Right() - 8.0f * s, r.y + 28.0f * s), W(0.95f));
-                    DrawText(ctx, Ago(f.time), m_fRecSub.Get(), RF(r.x + 62.0f * s, r.y + 27.0f * s, r.Right() - 8.0f * s, r.y + 46.0f * s), W(0.50f));
+                    if (!DrawFileBadge(ctx, m_brush.Get(), KindOfFile(f.name), Rect{ix, iy, isz, isz})) {
+                        if (f.icon) { const D2D1_RECT_F dst = RF(ix - 2 * s, iy - 2 * s, ix + isz + 2 * s, iy + isz + 2 * s); ctx->DrawBitmap(f.icon.Get(), &dst, 1.0f, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC); }
+                        else Fill(ctx, Rect{ix, iy, isz, isz}, 9.0f * s, W(0.08f));
+                    }
+                    DrawText(ctx, f.name, m_fRecName.Get(), RF(r.x + 66.0f * s, r.y + 7.0f * s, r.Right() - 8.0f * s, r.y + 28.0f * s), W(0.95f));
+                    DrawText(ctx, Ago(f.time), m_fRecSub.Get(), RF(r.x + 66.0f * s, r.y + 27.0f * s, r.Right() - 8.0f * s, r.y + 46.0f * s), W(0.50f));
                     break;
                 }
 
@@ -1366,8 +1599,10 @@ void StartMenu::Render() {
                     } else if (it.kind == kFileRow) {
                         FileItem& f = it.ref < 0 ? m_recents[-(it.ref + 1)] : m_files[it.ref];
                         if (!f.icon && !f.iconTried && iconBudget > 0) { EnsureFileIcon(f); --iconBudget; }
-                        if (f.icon) { const D2D1_RECT_F dst = RF(ib); ctx->DrawBitmap(f.icon.Get(), &dst, 1.0f, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC); }
-                        else Fill(ctx, ib, 9.0f * s, W(0.08f));
+                        if (!DrawFileBadge(ctx, m_brush.Get(), KindOfFile(f.name), ib)) {
+                            if (f.icon) { const D2D1_RECT_F dst = RF(ib); ctx->DrawBitmap(f.icon.Get(), &dst, 1.0f, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC); }
+                            else Fill(ctx, ib, 9.0f * s, W(0.08f));
+                        }
                         title = f.name;
                         sub = f.path.substr(0, f.path.find_last_of(L'\\'));
                     } else {

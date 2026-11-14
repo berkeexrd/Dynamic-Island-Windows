@@ -2,6 +2,25 @@
 
 ## [Yayınlanmadı]
 
+### Tam kabuk: masaüstü, dosya yöneticisi, oturum yöneticisi, installer
+- **AetherDesktop**: kendi masaüstü (yerleşim modlu duvar kağıdı, karartma, bulanıklık ve slayt gösterisi; gerçek kabuk simgeleri ve küçük resimleri, seçim, çerçeve seçimi, sürükle-bırak, yeniden adlandırma, pano, "Diğer seçenekler" altında Windows bağlam menüsü, otomatik düzen, `Ctrl` + tekerlekle simge boyutu, isteğe bağlı saat). Sürekli yeniden çizim yerine ihtiyaç anında çizim.
+- **Özelleştir** penceresi: ortada, en üstte (widget'ların üstünde), canlı önizleme, üç sekme (duvar kağıdı, simgeler ve renk, masaüstü).
+- **AetherExplorer**: sıfırdan dosya yöneticisi (sanallaştırılmış liste, 7-Zip / WinRAR / tar ile arşivler, ağ konumları). **AetherBin**: Geri Dönüşüm Kutusu penceresi (geri yükle, sil, boşalt).
+- **AetherShell**: çubuğu, masaüstünü ve adayı başlatıp izler; oturum açılış başlangıç öğelerini çalıştırır; Alt+Tab, Win+Tab, Win+R, Win+M, Win+I, Win+D, Win+E. `explorer.exe` yerine geçebilir; acil durum çıkışları (açılışta Shift, `use-explorer`, kaldırma betikleri).
+- **AetherIntro**: oturum açılışı / ilk çalıştırma logo animasyonu (`no-intro` kapatır).
+- **AetherSetup**: modern arayüzlü tek dosya kurulum ve kaldırma programı; bileşen ve kabuk değiştirme seçenekleri (bu kullanıcı veya tüm kullanıcılar), sessiz mod (`/S`), CMake'in ürettiği gömülü paket.
+- Masaüstü widget'ları: sağ tık menüsüyle tek veya tüm widget'ları gizleme.
+- Yeni Aether logosu ve ikon seti.
+- Düzeltildi: görev çubuğundaki "masaüstünü göster" düğmesi Explorer'ın çıplak masaüstünü AetherDesktop'un üstüne çıkarıyordu; oyun modu algılayıcısı masaüstü penceresini artık tam ekran uygulama saymıyor.
+
+### Cam görünümü konsepte yaklaştırıldı
+- **Parlama panelin içinden silinir**: gölge ve renkli glow artık gövdenin altında durmuyor; yarı saydam temalar kirli bir renk yerine masaüstünü gösteriyor (`DrawGlassGlow` + `PunchOutPanels`; eski davranış için `AETHER_GLASS_PUNCH_OUT=0`). Düz temalar (Klasik) değişmedi.
+- Her temadan türetilen **ikinci vurgu rengi** (`glass::kAccent2`, tema başına ton kaydırma) iki tonlu parlamayı, 3 duraklı kenarı, halkaları, çubukları ve saati renklendiriyor. Yazı renkleri de temayı izliyor.
+- `DCompLayer::CreateLinearGradientBrush` artık istenen sayıda durak alıyor.
+- Violet / Lavanta gövde renkleri konsepten ölçüldü (daha derin mor, daha az gri); kenar daha yumuşak ince çizgi.
+- Widget'lar: saat kartsız (büyük ince rakamlar, gradient, tarih, hava durumu satırı, köşe işaretleri); halkalar yay boyunca belirginleşiyor; depolama çubuklarında disk ikonu, gradient dolgu ve parlama var; şeffaf kenar boşluğu genişletildi, parlama pencere kenarında kesilmiyor.
+- Widget'lar saniyede 5 yerine 1 kez çiziliyor (tıklama, tema değişimi ve gösterme sonrası kısa süre 5 Hz); güneş ikonu sabit.
+
 ### Ağ merkezi, widget'lar, temalar
 - Yeni ağ paneli: Wi-Fi anahtarı, animasyonlu mevcut bağlantı, taranan ağ listesi, şifreyle bağlanma (WPA2/WPA3/açık), bağlantıyı kesme, ağ ve uçak modu kısayolları.
 - Masaüstü widget'ları: Depolama, Hava Durumu ve Çalan Müzik (oynatma düğmeleriyle). Ayarlardaki widget anahtarları artık gerçekten gösterip gizliyor.

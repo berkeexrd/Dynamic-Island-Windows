@@ -74,6 +74,10 @@ private:
     ComPtr<IDWriteTextFormat> m_fontCenter;    // centred text inside rings
     ComPtr<IDWriteTextFormat> m_fontTiny;      // ring labels
     ComPtr<IDWriteTextFormat> m_fontIcon;      // Segoe Fluent Icons
+    ComPtr<IDWriteTextFormat> m_fontClock;     // big, thin clock digits (card-less clock)
+    ComPtr<IDWriteTextFormat> m_fontDate;      // date line above the clock (centred)
+    ComPtr<IDWriteTextFormat> m_fontInfo;      // weather line below the clock (left aligned, measured)
+    ComPtr<IDWriteTextFormat> m_fontTinyR;     // right aligned small text (storage usage)
     ComPtr<ID2D1SolidColorBrush> m_brush;
     bool m_hasIconFont{false};
 

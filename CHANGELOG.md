@@ -5,6 +5,25 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), versions follow
 
 ## [Unreleased]
 
+### Complete shell: desktop, file manager, session manager, installer
+- **AetherDesktop**: own desktop (wallpaper with fit modes, dim, blur and slideshow; icons with real shell icons and thumbnails, selection, marquee, drag & drop, rename, clipboard, Windows context menu behind "More options", auto arrange, `Ctrl` + wheel icon size, optional clock). On-demand rendering instead of continuous redraws.
+- **Customise** window: centred, top-most (above desktop widgets), live preview, three tabs (wallpaper, icons and colour, desktop).
+- **AetherExplorer**: from-scratch file manager (virtualised list, archives via 7-Zip / WinRAR / tar, network locations). **AetherBin**: Recycle Bin window (restore, delete, empty).
+- **AetherShell**: starts and supervises bar, desktop and island; runs logon startup items; Alt+Tab, Win+Tab, Win+R, Win+M, Win+I, Win+D, Win+E. Can replace `explorer.exe`; escape hatches (Shift at logon, `use-explorer`, uninstall scripts).
+- **AetherIntro**: logon / first-run logo animation (`no-intro` disables it).
+- **AetherSetup**: single-file installer and uninstaller with a modern UI, component and shell-replacement options (this user or all users), silent mode (`/S`), embedded payload built by CMake.
+- Desktop widgets: right-click menu to hide one or all widgets.
+- New Aether logo and icon set.
+- Fixed: the taskbar "show desktop" button raised Explorer's bare desktop over AetherDesktop; the game-mode detector no longer treats the desktop window as a full-screen app.
+
+### Glass look matched to the concept
+- **Halo is cut out of the panel**: the shadow and coloured glow no longer sit under the body, so translucent themes show the desktop instead of a muddy tint (`DrawGlassGlow` + `PunchOutPanels`; `AETHER_GLASS_PUNCH_OUT=0` restores the old behaviour). Flat themes (Classic) are unchanged.
+- **Second accent colour** derived from every theme (`glass::kAccent2`, hue-shifted per theme) drives a two-hue halo, the 3-stop rim, rings, bars and the clock. Text colours follow the theme too.
+- `DCompLayer::CreateLinearGradientBrush` accepts any number of stops.
+- Violet / Lavender body colours re-measured from the concept (deeper purple, less grey); the rim is a softer hairline.
+- Widgets: the clock is card-less (big thin digits with a gradient, date, weather line, corner brackets); rings fade in along the arc; storage bars have drive glyphs, a gradient fill and a glow; wider transparent margin so the halo is no longer cut at the window edge.
+- Widgets redraw once a second instead of five times (5 Hz only briefly after a click, theme change or show), the sun icon is static.
+
 ### Network centre, widgets, themes
 - New network panel: Wi-Fi switch, animated current connection, scanned network list, connect with password (WPA2/WPA3/open), disconnect, network and airplane-mode shortcuts.
 - Desktop widgets: Storage, Weather and Now playing (with transport buttons). The per-widget switches in Settings now really show / hide them.

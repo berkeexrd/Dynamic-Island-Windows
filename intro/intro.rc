@@ -1,0 +1,4 @@
+#include <windows.h>
+
+1 ICON "../assets/icons/aether.ico"
+301 RCDATA "../assets/icons/aether.png"

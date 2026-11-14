@@ -40,8 +40,8 @@ namespace i18n = aether::i18n;
 namespace {
 
 constexpr float kDockH = 56.0f;
-constexpr float kMargin = 10.0f;
-constexpr float kReserved = 74.0f;
+constexpr float kMargin = 14.0f;
+constexpr float kReserved = 82.0f;
 constexpr float kTipRoom = 90.0f;
 constexpr float kItem = 44.0f;
 constexpr float kGap = 4.0f;
@@ -285,10 +285,14 @@ void AetherBar::PositionWindow() {
     MONITORINFO mi = {sizeof(mi)};
     GetMonitorInfoW(m_mon, &mi);
     m_monRect = mi.rcMonitor;
-    m_dpi = core::MonitorScale(m_mon);
+    const float monScale = core::MonitorScale(m_mon);
     m_windowW = m_monRect.right - m_monRect.left;
-    m_windowH = static_cast<int>((kReserved + kTipRoom) * m_dpi);
-    m_reservedPx = static_cast<int>(kReserved * m_dpi);
+    // The concept was drawn on a 1672 px wide canvas; on wider screens the bar is scaled up a little
+    // (up to 15 %) so it keeps the same proportions. Window / work-area metrics use the plain scale.
+    const float design = std::clamp(static_cast<float>(m_windowW) / (1672.0f * std::max(1.0f, monScale)), 1.0f, 1.15f);
+    m_dpi = monScale * design;
+    m_windowH = static_cast<int>((kReserved + kTipRoom) * monScale);
+    m_reservedPx = static_cast<int>(kReserved * monScale);
     if (m_hwnd) {
         SetWindowPos(m_hwnd, HWND_TOPMOST, m_monRect.left, m_monRect.bottom - m_windowH, m_windowW, m_windowH, SWP_NOACTIVATE);
     }
@@ -321,8 +325,20 @@ bool AetherBar::Create() {
     m_dockAppear.SetTarget(1.0f);
     ComputeLayout();
     UpdateRegion();
+    RefreshBackdrop(false);   // window not visible yet
     ShowWindow(m_hwnd, SW_SHOWNOACTIVATE);
     return true;
+}
+
+// The pills sit in the reserved strip, where only the wallpaper can be behind them. A blurred snapshot of that
+// strip gives them a (light) frosted look. Re-taken when the wallpaper changes: the bar is hidden for a frame.
+void AetherBar::RefreshBackdrop(bool hideWindowFirst) {
+    if (!m_dcomp || !m_hwnd) return;
+    const bool hide = hideWindowFirst && m_visible && IsWindowVisible(m_hwnd);
+    if (hide) { ShowWindow(m_hwnd, SW_HIDE); DwmFlush(); }
+    RECT wr; GetWindowRect(m_hwnd, &wr);
+    render::CaptureBackdrop(m_dcomp->GetContext(), wr.left, wr.top, wr.right - wr.left, wr.bottom - wr.top, 2, m_backdrop);
+    if (hide) ShowWindow(m_hwnd, SW_SHOWNOACTIVATE);
 }
 
 void AetherBar::RegisterAppBar() {
@@ -394,7 +410,43 @@ Entry* AetherBar::FindEntry(const std::wstring& key) {
     return nullptr;
 }
 
+// Sharp icon straight from the executable (up to 256 px, scaled down by Direct2D) instead of the 32 px window icon
+// that used to be stretched to 48 px. Returns null for hosts whose exe icon would be wrong (UWP frame host).
+static ComPtr<ID2D1Bitmap1> ShellIconBitmap(ID2D1DeviceContext* ctx, const std::wstring& path, int px) {
+    ComPtr<ID2D1Bitmap1> out;
+    if (!ctx || path.empty() || path.find(L"ApplicationFrameHost") != std::wstring::npos) return out;
+    ComPtr<IShellItemImageFactory> factory;
+    if (FAILED(SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&factory))) || !factory) return out;
+    HBITMAP hbm = nullptr;
+    if (FAILED(factory->GetImage(SIZE{px, px}, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK, &hbm)) || !hbm) return out;
+    BITMAP bm{};
+    GetObjectW(hbm, sizeof(bm), &bm);
+    if (bm.bmWidth > 0 && bm.bmHeight > 0) {
+        std::vector<uint32_t> pixels(static_cast<size_t>(bm.bmWidth) * bm.bmHeight);
+        BITMAPINFO bi = {};
+        bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bi.bmiHeader.biWidth = bm.bmWidth;
+        bi.bmiHeader.biHeight = -bm.bmHeight;
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
+        HDC dc = GetDC(nullptr);
+        if (GetDIBits(dc, hbm, 0, bm.bmHeight, pixels.data(), &bi, DIB_RGB_COLORS)) {
+            bool anyAlpha = false;
+            for (uint32_t p : pixels) if (p >> 24) { anyAlpha = true; break; }
+            if (!anyAlpha) for (auto& p : pixels) if (p & 0x00FFFFFF) p |= 0xFF000000;
+            D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+                D2D1_BITMAP_OPTIONS_NONE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+            ctx->CreateBitmap(D2D1::SizeU(bm.bmWidth, bm.bmHeight), pixels.data(), bm.bmWidth * 4, props, &out);
+        }
+        ReleaseDC(nullptr, dc);
+    }
+    DeleteObject(hbm);
+    return out;
+}
+
 ComPtr<ID2D1Bitmap1> AetherBar::LoadIcon(const Entry& e) {
+    if (auto sharp = ShellIconBitmap(m_dcomp->GetContext(), e.exePath, 128)) return sharp;
     HICON icon = nullptr;
     bool owned = false;
     for (HWND w : e.windows) { icon = WindowIcon(w); if (icon) break; }
@@ -510,6 +562,7 @@ bool AetherBar::IsAnimating() const {
     for (const auto& e : m_entries) {
         if (!e->appear.IsResting() || !e->hover.IsResting() || !e->active.IsResting()) return true;
     }
+    for (int k = 0; k < 16; ++k) if (m_hoverAmt[k] > 0.0f && m_hoverAmt[k] < 1.0f) return true;
     return std::abs(m_tipAlpha - (m_tipWanted ? 1.0f : 0.0f)) > 0.01f;
 }
 
@@ -559,6 +612,11 @@ void AetherBar::Tick(float dt) {
         e.hover.SetTarget((m_hoverKind == Hit::Item && m_hoverItem == i) ? 1.0f : 0.0f);
         e.appear.Update(dt); e.hover.Update(dt); e.active.Update(dt);
     }
+    for (int k = 0; k < 16; ++k) {
+        const float t = static_cast<int>(m_hoverKind) == k ? 1.0f : 0.0f;
+        m_hoverAmt[k] += (t - m_hoverAmt[k]) * (1.0f - std::exp(-dt * 16.0f));
+        if (std::abs(t - m_hoverAmt[k]) < 0.004f) m_hoverAmt[k] = t;
+    }
     m_startHover.SetTarget(m_hoverKind == Hit::Start ? 1.0f : 0.0f);
     m_startHover.Update(dt);
     m_dockAppear.Update(dt);
@@ -576,14 +634,16 @@ void AetherBar::ComputeLayout() {
     float contentW = 0.0f;
     for (const auto& e : m_entries) contentW += (kItem + kGap) * s * e->appear.GetValue();
     const float startW = kItem * s;
-    const float dockW = (kPad * 2 + 6) * s + startW + contentW;
+    const float searchW = kItem * s + kGap * s;
+    const float dockW = (kPad * 2 + 6) * s + startW + searchW + contentW;
     const float left = (static_cast<float>(m_windowW) - dockW) * 0.5f;
 
     m_layout.dock = Rect{left, top, dockW, h};
     m_layout.start = Rect{left + kPad * s, top + (h - kItem * s) * 0.5f, startW, kItem * s};
 
     m_layout.items.assign(m_entries.size(), Rect{});
-    float x = m_layout.start.Right() + 6 * s;
+    m_layout.search = Rect{m_layout.start.Right() + 6 * s, top + (h - kItem * s) * 0.5f, kItem * s, kItem * s};
+    float x = m_layout.search.Right() + kGap * s;
     for (size_t i = 0; i < m_entries.size(); ++i) {
         m_layout.items[i] = Rect{x, top + (h - kItem * s) * 0.5f, kItem * s, kItem * s};
         x += (kItem + kGap) * s * m_entries[i]->appear.GetValue();
@@ -591,12 +651,12 @@ void AetherBar::ComputeLayout() {
 
     SYSTEM_POWER_STATUS ps{};
     const bool battery = m_primary && GetSystemPowerStatus(&ps) && ps.BatteryFlag != 128 && ps.BatteryLifePercent <= 100;
-    const float chevW = m_primary ? 30.0f * s : 0.0f;
-    const float netW = m_primary ? 34.0f * s : 0.0f;
-    const float bellW = m_primary ? 36.0f * s : 0.0f;
+    const float chevW = m_primary ? 34.0f * s : 0.0f;
+    const float netW = m_primary ? 38.0f * s : 0.0f;
+    const float bellW = m_primary ? 40.0f * s : 0.0f;
     const float quickW = m_primary ? (battery ? 104.0f : 40.0f) * s : 0.0f;
     const float clockW = 84.0f * s;
-    const float deskW = m_primary ? 34.0f * s : 0.0f;   // show-desktop button
+    const float deskW = m_primary ? 14.0f * s : 0.0f;   // show-desktop zone (invisible until hovered)
     const float rightW = 10.0f * s + chevW + quickW + netW + clockW + bellW + deskW;
     const float rx = static_cast<float>(m_windowW) - kMargin * s * 1.4f - rightW;
     m_layout.right = Rect{rx, top, rightW, h};
@@ -626,6 +686,7 @@ void AetherBar::ComputeTooltip() {
                 }
                 break;
             case Hit::Start:   text = i18n::Pick(L"Start", L"Başlat"); anchor = m_layout.start.Center().x; break;
+            case Hit::Search:  text = i18n::Pick(L"Search", L"Ara"); anchor = m_layout.search.Center().x; break;
             case Hit::Chevron: text = i18n::Pick(L"System tray (hidden icons)", L"Sistem tepsisi (gizli simgeler)"); anchor = m_layout.chevron.Center().x; break;
             case Hit::Quick:   text = i18n::Pick(L"Quick settings  -  scroll to change volume", L"Hızlı ayarlar  -  ses için kaydırın"); anchor = m_layout.quick.Center().x; break;
             case Hit::Network: text = m_netKind == 0 ? i18n::Pick(L"No network connection", L"Ağ bağlantısı yok") : i18n::Pick(L"Network", L"Ağ"); anchor = m_layout.network.Center().x; break;
@@ -721,18 +782,31 @@ void AetherBar::DrawGlyph(ID2D1DeviceContext* ctx, wchar_t g, const D2D1_RECT_F&
 
 void AetherBar::DrawPill(ID2D1DeviceContext* ctx, const Rect& r, float radius) {
     // The outer glow of all pills is drawn once in Render(); this is only the glass body.
-    if (auto geo = m_dcomp->CreateSquircleGeometry(r, radius))
-        render::DrawGlassBody(ctx, m_dcomp.get(), m_brush.Get(), geo.Get(), r, m_dpi, 0.8f);
+    if (auto geo = m_dcomp->CreateSquircleGeometry(r, radius)) {
+        if (m_backdrop) render::FillBackdrop(ctx, m_backdrop, geo.Get(), Rect{0.0f, 0.0f, static_cast<float>(m_windowW), static_cast<float>(m_windowH)}, 0.9f);
+        render::DrawGlassBody(ctx, m_dcomp.get(), m_brush.Get(), geo.Get(), r, m_dpi, 0.8f, m_backdrop ? 0.72f : 1.0f);
+    }
 }
 
 void AetherBar::DrawStartLogo(ID2D1DeviceContext* ctx, const Vec2& c, float size, float alpha) {
     const float cell = size * 0.46f, gap = size * 0.08f;
     const float x0 = c.x - cell - gap * 0.5f, y0 = c.y - cell - gap * 0.5f;
-    if (render::glass::CurrentTheme().flat) m_brush->SetColor(D2D1::ColorF(ui::kPurpleLight.r, ui::kPurpleLight.g, ui::kPurpleLight.b, alpha));
-    else m_brush->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, alpha));
+    const auto& th = render::glass::CurrentTheme();
+    ID2D1Brush* fill = m_brush.Get();
+    ComPtr<ID2D1LinearGradientBrush> grad;
+    if (th.flat) m_brush->SetColor(D2D1::ColorF(ui::kPurpleLight.r, ui::kPurpleLight.g, ui::kPurpleLight.b, alpha));
+    else if (th.bold) m_brush->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, alpha));
+    else {
+        // lilac -> theme accent, like the concept's glossy logo
+        const Color top = Color::Lerp(Color{1.0f, 1.0f, 1.0f, 1.0f}, render::glass::kVioletLight, 0.50f);
+        const Color bot = Color::Lerp(render::glass::kAccent2, render::glass::kVioletLight, 0.25f);
+        grad = m_dcomp->CreateLinearGradientBrush(render::glass::A(top, alpha), render::glass::A(bot, alpha),
+                                                  D2D1::Point2F(x0, y0), D2D1::Point2F(x0 + 2 * cell + gap, y0 + 2 * cell + gap));
+        if (grad) fill = grad.Get(); else m_brush->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, alpha));
+    }
     for (int iy = 0; iy < 2; ++iy) for (int ix = 0; ix < 2; ++ix) {
         const float x = x0 + ix * (cell + gap), y = y0 + iy * (cell + gap);
-        ctx->FillRoundedRectangle(D2D1::RoundedRect(RF(x, y, x + cell, y + cell), size * 0.07f, size * 0.07f), m_brush.Get());
+        ctx->FillRoundedRectangle(D2D1::RoundedRect(RF(x, y, x + cell, y + cell), size * 0.11f, size * 0.11f), fill);
     }
 }
 
@@ -838,6 +912,20 @@ void AetherBar::Render() {
     const float sh = m_startHover.GetValue();
     if (!render::glass::CurrentTheme().flat) {
         const Rect& sr = m_layout.start;
+        const bool bold = render::glass::CurrentTheme().bold;
+        if (!bold) {
+            // same quiet tile as the dock items: a soft squircle that fades in on hover / while the menu is open
+            const float open = (m_start && m_start->IsOpen()) ? 1.0f : 0.0f;
+            const float a = std::max(sh, open);
+            if (a > 0.01f) {
+                if (auto g = m_dcomp->CreateSquircleGeometry(sr, 14.0f * s)) {
+                    m_brush->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.07f * sh));
+                    ctx->FillGeometry(g.Get(), m_brush.Get());
+                    m_brush->SetColor(D2D1::ColorF(render::glass::kViolet.r, render::glass::kViolet.g, render::glass::kViolet.b, 0.20f * open));
+                    ctx->FillGeometry(g.Get(), m_brush.Get());
+                }
+            }
+        } else {
         for (int i = 3; i >= 1; --i) {   // violet glow
             if (auto g = m_dcomp->CreateSquircleGeometry(Rect{sr.x - i * 2.0f * s, sr.y - i * 2.0f * s, sr.width + i * 4.0f * s, sr.height + i * 4.0f * s}, 15.0f * s + i * 2.0f * s)) {
                 m_brush->SetColor(D2D1::ColorF(ui::kPurple.r, ui::kPurple.g, ui::kPurple.b, (0.05f + 0.05f * sh) * (4 - i)));
@@ -845,17 +933,29 @@ void AetherBar::Render() {
             }
         }
         if (auto g = m_dcomp->CreateSquircleGeometry(sr, 15.0f * s)) {
-            const bool bold = render::glass::CurrentTheme().bold;
-            const Color top = bold ? Color{ui::kPurpleLight.r * 0.92f, ui::kPurpleLight.g * 0.92f, ui::kPurpleLight.b, 0.97f} : Color{0.64f + 0.06f * sh, 0.46f + 0.06f * sh, 1.0f, 0.62f + 0.12f * sh};
-            const Color bot = bold ? Color{ui::kPurple.r, ui::kPurple.g, ui::kPurple.b, 0.95f} : Color{ui::kPurpleDeep.r, ui::kPurpleDeep.g, ui::kPurpleDeep.b, 0.40f + 0.12f * sh};
+            const Color top = Color{ui::kPurpleLight.r * 0.92f, ui::kPurpleLight.g * 0.92f, ui::kPurpleLight.b, 0.97f};
+            const Color bot = Color{ui::kPurple.r, ui::kPurple.g, ui::kPurple.b, 0.95f};
             auto fill = m_dcomp->CreateLinearGradientBrush(top, bot,
                                                            D2D1::Point2F(sr.x, sr.y), D2D1::Point2F(sr.Right(), sr.Bottom()));
             if (fill) ctx->FillGeometry(g.Get(), fill.Get());
             m_brush->SetColor(D2D1::ColorF(ui::kPurpleLight.r, ui::kPurpleLight.g, ui::kPurpleLight.b, 0.85f));
             ctx->DrawGeometry(g.Get(), m_brush.Get(), 1.3f * s);
         }
+        }
     }
     DrawStartLogo(ctx, m_layout.start.Center(), (19.0f + 2.0f * sh) * s, 1.0f);
+
+    {   // search button: icon only, same hover tile as the other items
+        const Rect& sb = m_layout.search;
+        const float a = m_hoverAmt[static_cast<int>(Hit::Search)];
+        if (a > 0.01f) {
+            if (auto g = m_dcomp->CreateSquircleGeometry(sb, 14.0f * s)) {
+                m_brush->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.07f * a));
+                ctx->FillGeometry(g.Get(), m_brush.Get());
+            }
+        }
+        DrawGlyph(ctx, ui::kGlyphSearch, RF(sb), render::glass::A(Color::Lerp(Color{1.0f, 1.0f, 1.0f, 1.0f}, render::glass::kVioletLight, 0.35f), 0.80f + 0.20f * a));
+    }
 
     for (size_t i = 0; i < m_entries.size(); ++i) {
         const Entry& e = *m_entries[i];
@@ -886,20 +986,33 @@ void AetherBar::Render() {
             ctx->DrawBitmap(e.icon.Get(), &dst, (e.Running() ? 1.0f : 0.78f) * appear, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
         }
         if (e.Running()) {
-            const float dw = (4.0f + 12.0f * act) * s, dh = 3.6f * s;
-            const float dy = slot.Bottom() - 3.0f * s;
-            m_brush->SetColor(D2D1::ColorF(act > 0.5f ? ui::kPurpleLight.r : 1.0f, act > 0.5f ? ui::kPurpleLight.g : 1.0f, act > 0.5f ? ui::kPurpleLight.b : 1.0f, (0.50f + 0.45f * act) * appear));
-            ctx->FillRoundedRectangle(D2D1::RoundedRect(RF(c.x - dw / 2, dy - dh, c.x + dw / 2, dy), dh / 2, dh / 2), m_brush.Get());
+            // thin lilac "light line" hugging the bottom rim: bright centre fading to both ends + soft bloom
+            const float dw = (14.0f + 8.0f * act) * s, dh = 2.2f * s;
+            const float dy = m_layout.dock.Bottom() - 6.0f * s;
+            const Color ind = render::glass::kVioletLight;
+            const float gl = (0.35f + 0.65f * act) * appear;
+            if (auto bl = m_dcomp->CreateRadialGradientBrush(render::glass::A(ind, 0.34f * gl), render::glass::A(ind, 0.0f), D2D1::Point2F(c.x, dy), dw * 0.95f, 5.5f * s))
+                ctx->FillEllipse(D2D1::Ellipse(D2D1::Point2F(c.x, dy), dw * 0.95f, 5.5f * s), bl.Get());
+            if (auto ln = m_dcomp->CreateLinearGradientBrush({{0.0f, render::glass::A(ind, 0.0f)}, {0.28f, render::glass::A(ind, (0.60f + 0.35f * act) * appear)},
+                                                              {0.72f, render::glass::A(ind, (0.60f + 0.35f * act) * appear)}, {1.0f, render::glass::A(ind, 0.0f)}},
+                                                             D2D1::Point2F(c.x - dw / 2, dy), D2D1::Point2F(c.x + dw / 2, dy)))
+                ctx->FillRoundedRectangle(D2D1::RoundedRect(RF(c.x - dw / 2, dy - dh / 2, c.x + dw / 2, dy + dh / 2), dh / 2, dh / 2), ln.Get());
         }
     }
 
     // ---- system pill --------------------------------------------------------------------------------
     DrawPill(ctx, m_layout.right, 24.0f * s);
+    // Each icon gets its own compact, eased highlight; the old full-height boxes touched their neighbours.
     auto hoverBg = [&](const Rect& r, Hit kind) {
-        if (m_hoverKind != kind || r.width < 1.0f) return;
-        if (auto g = m_dcomp->CreateSquircleGeometry(r, 12.0f * s)) {
-            m_brush->SetColor(D2D1::ColorF(1, 1, 1, 0.09f));
+        const float a = m_hoverAmt[static_cast<int>(kind)];
+        if (a < 0.01f || r.width < 1.0f) return;
+        const float hh = std::min(r.height, 38.0f * s);
+        const Rect q{r.x + 3.0f * s, r.Center().y - hh / 2, r.width - 6.0f * s, hh};
+        if (auto g = m_dcomp->CreateSquircleGeometry(q, 13.0f * s)) {
+            m_brush->SetColor(D2D1::ColorF(1, 1, 1, 0.075f * a));
             ctx->FillGeometry(g.Get(), m_brush.Get());
+            m_brush->SetColor(D2D1::ColorF(render::glass::kVioletLight.r, render::glass::kVioletLight.g, render::glass::kVioletLight.b, 0.16f * a));
+            ctx->DrawGeometry(g.Get(), m_brush.Get(), 1.0f * s);
         }
     };
     hoverBg(m_layout.chevron, Hit::Chevron);
@@ -907,7 +1020,6 @@ void AetherBar::Render() {
     hoverBg(m_layout.network, Hit::Network);
     hoverBg(m_layout.clock, Hit::Clock);
     hoverBg(m_layout.bell, Hit::Bell);
-    hoverBg(m_layout.desktop, Hit::Desktop);
 
     if (m_primary) {
         DrawGlyph(ctx, kGlyphChevron, RF(m_layout.chevron), Color{1.0f, 1.0f, 1.0f, 0.85f});
@@ -933,7 +1045,14 @@ void AetherBar::Render() {
     if (m_primary) {
         const Rect& nw = m_layout.network;
         DrawGlyph(ctx, m_netKind == 2 ? ui::kGlyphEthernet : ui::kGlyphWifi, RF(nw), Color{1.0f, 1.0f, 1.0f, m_netKind == 0 ? 0.35f : 0.92f});
-        DrawGlyph(ctx, kGlyphBell, RF(m_layout.bell), Color{1.0f, 1.0f, 1.0f, 0.88f});
+        const bool tinted = !render::glass::CurrentTheme().flat;
+        DrawGlyph(ctx, kGlyphBell, RF(m_layout.bell),
+                  tinted ? Color::Lerp(Color{1.0f, 1.0f, 1.0f, 1.0f}, render::glass::kVioletLight, 0.60f) : Color{1.0f, 1.0f, 1.0f, 0.88f});
+        {   // hairline divider between the system icons and the clock
+            const Rect& ck2 = m_layout.clock;
+            m_brush->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.09f));
+            ctx->FillRectangle(RF(ck2.x - 3 * s, ck2.y + 6 * s, ck2.x - 3 * s + 1.0f * s, ck2.Bottom() - 6 * s), m_brush.Get());
+        }
         // notification badge (refreshed lazily)
         {
             static ULONGLONG lastPoll = 0; const ULONGLONG now = GetTickCount64();
@@ -941,19 +1060,21 @@ void AetherBar::Render() {
             if (NotificationFeed::Instance().Count() > 0) {
                 const Rect& bl = m_layout.bell;
                 ID2D1SolidColorBrush* dot = m_brush.Get();
-                dot->SetColor(D2D1::ColorF(1.0f, 0.36f, 0.45f, 1.0f));
+                if (render::glass::CurrentTheme().flat) dot->SetColor(D2D1::ColorF(1.0f, 0.36f, 0.45f, 1.0f));
+                else dot->SetColor(D2D1::ColorF(render::glass::kAccent2.r, render::glass::kAccent2.g, render::glass::kAccent2.b, 1.0f));
                 ctx->FillEllipse(D2D1::Ellipse(D2D1::Point2F(bl.Center().x + 7 * s, bl.Center().y - 7 * s), 4.2f * s, 4.2f * s), dot);
             }
         }
-        // show-desktop: thin edge sliver that lights up on hover (like the classic Windows corner)
+        // show-desktop zone: invisible until hovered, then a short lilac line fades in (no heavy block)
         {
-            const Rect& dk = m_layout.desktop;
-            const bool hov = m_hoverKind == Hit::Desktop;
-            ID2D1SolidColorBrush* b = m_brush.Get();
-            b->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, hov ? 0.20f : 0.0f));
-            if (hov) ctx->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(dk.x + 4 * s, dk.y, dk.Right() - 2 * s, dk.Bottom()), 6 * s, 6 * s), b);
-            b->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, hov ? 0.85f : 0.32f));
-            ctx->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(dk.Right() - 6 * s, dk.y + 6 * s, dk.Right() - 4 * s, dk.Bottom() - 6 * s), 1 * s, 1 * s), b);
+            const float a = m_hoverAmt[static_cast<int>(Hit::Desktop)];
+            if (a > 0.01f) {
+                const Rect& dk = m_layout.desktop;
+                const Color l = render::glass::kVioletLight;
+                m_brush->SetColor(D2D1::ColorF(l.r, l.g, l.b, 0.75f * a));
+                const float cx = dk.Right() - 6.0f * s, hh = 22.0f * s;
+                ctx->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(cx - 1.0f * s, dk.Center().y - hh / 2, cx + 1.0f * s, dk.Center().y + hh / 2), 1.0f * s, 1.0f * s), m_brush.Get());
+            }
         }
     }
 
@@ -961,8 +1082,8 @@ void AetherBar::Render() {
     wchar_t tm[16]; swprintf_s(tm, L"%02d:%02d", st.wHour, st.wMinute);
     const std::wstring date = i18n::ShortDate(st);
     const Rect& ck = m_layout.clock;
-    DrawText(ctx, tm, m_fontTime.Get(), RF(ck.x, ck.y + 2 * s, ck.Right(), ck.y + 24 * s), Color{1.0f, 1.0f, 1.0f, 0.96f});
-    DrawText(ctx, date, m_fontDate.Get(), RF(ck.x, ck.y + 22 * s, ck.Right(), ck.Bottom() - 2 * s), Color{1.0f, 1.0f, 1.0f, 0.55f});
+    DrawText(ctx, tm, m_fontTime.Get(), RF(ck.x, ck.y + 2 * s, ck.Right(), ck.y + 24 * s), render::glass::A(render::glass::kText, 0.98f));
+    DrawText(ctx, date, m_fontDate.Get(), RF(ck.x, ck.y + 22 * s, ck.Right(), ck.Bottom() - 2 * s), render::glass::A(render::glass::kMuted, 0.90f));
 
     // ---- weather pill (bottom-left) -----------------------------------------------------------------
     if (m_layout.weather.width > 1.0f) {
@@ -1014,6 +1135,7 @@ AetherBar::Hit AetherBar::HitTest(const Vec2& pt, int& index) const {
     const float lift = (1.0f - Clamp01(m_dockAppear.GetValue())) * 30.0f * m_dpi;
     const Vec2 p{pt.x, pt.y - lift};
     if (m_layout.start.Contains(p)) return Hit::Start;
+    if (m_layout.search.Contains(p)) return Hit::Search;
     for (size_t i = 0; i < m_layout.items.size(); ++i) {
         if (m_entries[i]->appear.GetValue() > 0.5f && m_layout.items[i].Contains(p)) { index = static_cast<int>(i); return Hit::Item; }
     }
@@ -1127,6 +1249,12 @@ LRESULT AetherBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 ShowWindow(hwnd, m_visible ? SW_SHOWNOACTIVATE : SW_HIDE);
             }
             return 0;
+        case WM_SETTINGCHANGE:
+            if (wp == SPI_SETDESKWALLPAPER) SetTimer(hwnd, 77, 1500, nullptr);   // let the new wallpaper settle first
+            break;
+        case WM_TIMER:
+            if (wp == 77) { KillTimer(hwnd, 77); RefreshBackdrop(true); return 0; }
+            break;
         case WM_DISPLAYCHANGE:
         case WM_DPICHANGED:
             PostThreadMessageW(GetCurrentThreadId(), WM_APP + 2, 0, 0);   // manager rebuilds all bars
@@ -1163,7 +1291,7 @@ LRESULT AetherBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             ScreenToClient(hwnd, &pt);
             int idx;
             const Hit h = HitTest(Vec2{static_cast<float>(pt.x), static_cast<float>(pt.y)}, idx);
-            if (m_primary && (h == Hit::Quick || h == Hit::Chevron || h == Hit::Network || h == Hit::Clock || h == Hit::Bell || h == Hit::Right)) {
+            if (m_primary && h == Hit::Quick) {   // only the volume icon reacts to the wheel
                 AdjustVolume(static_cast<float>(GET_WHEEL_DELTA_WPARAM(wp)) / WHEEL_DELTA * 0.03f);
             }
             return 0;
@@ -1173,6 +1301,7 @@ LRESULT AetherBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             const Hit h = HitTest(Vec2{static_cast<float>(GET_X_LPARAM(lp)), static_cast<float>(GET_Y_LPARAM(lp))}, idx);
             switch (h) {
                 case Hit::Start:   if (m_start) m_start->Toggle(m_mon, m_reservedPx); break;
+                case Hit::Search:  if (m_start && !m_start->IsOpen()) m_start->Show(m_mon, m_reservedPx); break;   // opens with the search box focused
                 case Hit::Item:    OnItemClick(*m_entries[idx]); break;
                 case Hit::Chevron: ToggleFlyout(m_tray, m_layout.chevron); break;      // Aether tray
                 case Hit::Quick:   ToggleFlyout(m_quick, m_layout.quick); break;       // quick settings
@@ -1180,7 +1309,12 @@ LRESULT AetherBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 case Hit::Clock:   ToggleFlyout(m_calendar, m_layout.clock); break;    // clock + calendar
                 case Hit::Bell:    ToggleFlyout(m_notify, m_layout.bell); break;   // Aether notification centre
                 case Hit::Weather: ToggleFlyout(m_weather, m_layout.weather); break;     // animated weather panel
-                case Hit::Desktop: SendWinCombo('D'); break;
+                case Hit::Desktop: {
+                    // AetherDesktop does "show desktop" itself; a synthetic Win+D would reach Explorer and raise its own bare desktop over ours
+                    HWND dw = FindWindowW(L"AetherDesktopWindow", nullptr);
+                    if (dw) PostMessageW(dw, WM_APP + 4, 0, 0); else SendWinCombo('D');
+                    break;
+                }
                 default: break;
             }
             return 0;

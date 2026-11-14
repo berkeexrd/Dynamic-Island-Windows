@@ -12,3 +12,9 @@ CLAUDE.md
 .claude/
 open_settings.bat
 build_check.bat
+*.bak
+*.bak2
+*.tmp
+build_log.txt
+backup*/
+_backup*/

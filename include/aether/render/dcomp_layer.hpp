@@ -10,11 +10,19 @@
 #include <wrl/client.h>
 #include <string>
 #include <functional>
+#include <initializer_list>
+#include <vector>
 #include "aether/core/types.hpp"
 
 namespace aether::render {
 
 using Microsoft::WRL::ComPtr;
+
+// One colour stop of a multi-stop gradient (position 0..1, colour with alpha).
+struct GradientStop {
+    float pos;
+    core::Color color;
+};
 
 class DCompLayer {
 public:
@@ -38,6 +46,11 @@ public:
     ComPtr<ID2D1SolidColorBrush> CreateSolidBrush(const core::Color& color);
     ComPtr<ID2D1LinearGradientBrush> CreateLinearGradientBrush(
         const core::Color& startCol, const core::Color& endCol,
+        const D2D1_POINT_2F& startPt, const D2D1_POINT_2F& endPt
+    );
+    // Any number of stops: CreateLinearGradientBrush({{0.0f, a}, {0.5f, b}, {1.0f, c}}, from, to)
+    ComPtr<ID2D1LinearGradientBrush> CreateLinearGradientBrush(
+        std::initializer_list<GradientStop> stops,
         const D2D1_POINT_2F& startPt, const D2D1_POINT_2F& endPt
     );
     ComPtr<ID2D1RadialGradientBrush> CreateRadialGradientBrush(

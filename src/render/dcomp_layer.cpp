@@ -189,6 +189,14 @@ bool DCompLayer::CreateSwapChain(uint32_t width, uint32_t height) {
     m_d2dContext->SetDpi(96.0f, 96.0f);
     // ClearType cannot be used on a premultiplied-alpha surface; grayscale keeps text crisp and artifact free.
     m_d2dContext->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+    // Light text on dark glass looks heavy with the default contrast boost; natural-symmetric rendering without
+    // the extra contrast keeps every window's text finer and closer to the design.
+    if (m_dwriteFactory) {
+        ComPtr<IDWriteRenderingParams> rp;
+        if (SUCCEEDED(m_dwriteFactory->CreateCustomRenderingParams(2.0f, 0.0f, 0.0f, DWRITE_PIXEL_GEOMETRY_FLAT,
+                                                                   DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC, &rp)) && rp)
+            m_d2dContext->SetTextRenderingParams(rp.Get());
+    }
     return true;
 }
 
@@ -274,6 +282,29 @@ ComPtr<ID2D1LinearGradientBrush> DCompLayer::CreateLinearGradientBrush(
 
     ComPtr<ID2D1GradientStopCollection> stopCollection;
     if (SUCCEEDED(m_d2dContext->CreateGradientStopCollection(stops, 2, &stopCollection))) {
+        D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES props = D2D1::LinearGradientBrushProperties(startPt, endPt);
+        m_d2dContext->CreateLinearGradientBrush(props, stopCollection.Get(), &brush);
+    }
+    return brush;
+}
+
+ComPtr<ID2D1LinearGradientBrush> DCompLayer::CreateLinearGradientBrush(
+    std::initializer_list<GradientStop> stops,
+    const D2D1_POINT_2F& startPt, const D2D1_POINT_2F& endPt) {
+    ComPtr<ID2D1LinearGradientBrush> brush;
+    if (!m_d2dContext || stops.size() < 2) return brush;
+
+    std::vector<D2D1_GRADIENT_STOP> d2dStops;
+    d2dStops.reserve(stops.size());
+    for (const GradientStop& s : stops) {
+        D2D1_GRADIENT_STOP g;
+        g.position = std::clamp(s.pos, 0.0f, 1.0f);
+        g.color = D2D1::ColorF(s.color.r, s.color.g, s.color.b, s.color.a);
+        d2dStops.push_back(g);
+    }
+
+    ComPtr<ID2D1GradientStopCollection> stopCollection;
+    if (SUCCEEDED(m_d2dContext->CreateGradientStopCollection(d2dStops.data(), static_cast<UINT32>(d2dStops.size()), &stopCollection))) {
         D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES props = D2D1::LinearGradientBrushProperties(startPt, endPt);
         m_d2dContext->CreateLinearGradientBrush(props, stopCollection.Get(), &brush);
     }

@@ -13,6 +13,7 @@
 #include "aether/core/types.hpp"
 #include "aether/animation/spring.hpp"
 #include "aether/render/dcomp_layer.hpp"
+#include "aether/render/backdrop.hpp"
 
 namespace aether::bar {
 
@@ -33,6 +34,7 @@ public:
     [[nodiscard]] bool IsOpen() const { return m_wantOpen; }
     [[nodiscard]] bool JustDismissed() const { return GetTickCount64() - m_dismissTick < 600; }
     bool Frame(float dt);                       // returns true while it needs frames
+    bool Warm();                                // hidden pre-load (icons, avatar, one frame) so the first open is smooth; true while work remains
 
 private:
     enum class View { Home, Apps, Search };
@@ -64,6 +66,8 @@ private:
     void EnsureAppIcon(App& app);
     void EnsureFileIcon(FileItem& f);
     void LoadAvatar();
+    void CaptureBackdrop();                     // blurred snapshot of the screen behind the panel (taken on open)
+    void PrepareFor(HMONITOR monitor, int reservedPx);   // scale / window size / fonts for a monitor
 
     // layout
     void SetView(View v);
@@ -110,6 +114,8 @@ private:
     std::vector<FileItem> m_files;              // searchable index of the user's folders
     std::wstring m_query, m_userName, m_userSub, m_avatarPath;
     ComPtr<ID2D1Bitmap1> m_avatar;
+    render::Backdrop m_backdrop;                // quarter-resolution, pre-blurred snapshot behind the panel
+    bool m_warmed{false};
     bool m_avatarTried{false};
 
     std::atomic<int> m_loadState{0};            // 0 idle, 1 loading, 2 loaded (not yet adopted)

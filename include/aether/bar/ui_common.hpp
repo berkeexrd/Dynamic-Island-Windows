@@ -2,6 +2,8 @@
 // Shared helpers for every Aether shell window: modern cursors, icon conversion, glyph codes.
 #include <windows.h>
 #include <wrl/client.h>
+#include <shobjidl.h>
+#include <vector>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -114,8 +116,10 @@ inline HCURSOR Link()  { static HCURSOR c = MakeCursor(true,  std::max(32, GetSy
 inline void ApplyCursor(bool link) { SetCursor(link ? Link() : Arrow()); }
 
 inline ComPtr<ID2D1Bitmap1> IconToBitmap(ID2D1DeviceContext* ctx, HICON icon, int px) {
-    ComPtr<ID2D1Bitmap1> bmp;
-    if (!ctx || !icon) return bmp;
+    ComPtr<ID2D1Bitmap1> bmp;
+
+    if (!ctx || !icon) return bmp;
+
     // Render at the icon's own native size (GDI would otherwise stretch a 16 px image with poor filtering);
     // the GPU then scales it with a high-quality filter. Large icons (>= requested size) are drawn at the requested size.
     {
@@ -151,6 +155,51 @@ inline ComPtr<ID2D1Bitmap1> IconToBitmap(ID2D1DeviceContext* ctx, HICON icon, in
     if (dib) DeleteObject(dib);
     DeleteDC(dc);
     return bmp;
+}
+
+
+// Sharp icon straight from an executable (up to 256 px) through the shell's image factory. Tray icons are usually only
+// 16 px HICONs, which look soft when scaled up; the owning exe's own icon stays crisp. Null if unavailable.
+inline ComPtr<ID2D1Bitmap1> ExeIconBitmap(ID2D1DeviceContext* ctx, const std::wstring& path, int px) {
+    ComPtr<ID2D1Bitmap1> out;
+    if (!ctx || path.empty() || path.find(L"ApplicationFrameHost") != std::wstring::npos) return out;
+    ComPtr<IShellItemImageFactory> factory;
+    if (FAILED(SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&factory))) || !factory) return out;
+    HBITMAP hbm = nullptr;
+    if (FAILED(factory->GetImage(SIZE{px, px}, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK, &hbm)) || !hbm) return out;
+    BITMAP bm{};
+    GetObjectW(hbm, sizeof(bm), &bm);
+    if (bm.bmWidth > 0 && bm.bmHeight > 0) {
+        std::vector<uint32_t> pixels(static_cast<size_t>(bm.bmWidth) * bm.bmHeight);
+        BITMAPINFO bi = {};
+        bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER); bi.bmiHeader.biWidth = bm.bmWidth; bi.bmiHeader.biHeight = -bm.bmHeight;
+        bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32; bi.bmiHeader.biCompression = BI_RGB;
+        HDC dc = GetDC(nullptr);
+        if (GetDIBits(dc, hbm, 0, bm.bmHeight, pixels.data(), &bi, DIB_RGB_COLORS)) {
+            bool anyAlpha = false;
+            for (uint32_t v : pixels) if (v >> 24) { anyAlpha = true; break; }
+            if (!anyAlpha) for (auto& v : pixels) if (v & 0x00FFFFFF) v |= 0xFF000000;
+            D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_NONE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+            ctx->CreateBitmap(D2D1::SizeU(bm.bmWidth, bm.bmHeight), pixels.data(), bm.bmWidth * 4, props, &out);
+        }
+        ReleaseDC(nullptr, dc);
+    }
+    DeleteObject(hbm);
+    return out;
+}
+
+// Native pixel width of an HICON (0 when unknown).
+inline int IconNativeSize(HICON icon) {
+    int w = 0;
+    ICONINFO ii{};
+    if (icon && GetIconInfo(icon, &ii)) {
+        BITMAP bm{};
+        HBITMAP src = ii.hbmColor ? ii.hbmColor : ii.hbmMask;
+        if (src && GetObject(src, sizeof(bm), &bm)) w = bm.bmWidth;
+        if (ii.hbmColor) DeleteObject(ii.hbmColor);
+        if (ii.hbmMask) DeleteObject(ii.hbmMask);
+    }
+    return w;
 }
 
 } // namespace aether::bar::ui
